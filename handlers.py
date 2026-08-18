@@ -26,15 +26,29 @@ def register(client):
 
 
 async def start(client, message):
+    print(
+        f"[UPDATE] @{client.username} "
+        f"USER={message.from_user.id} "
+        f"TEXT={message.text!r}"
+    )
+
     if not await is_subscribed(None, client, message):
+        print(f"[START] ForceSub check failed for {message.from_user.id}")
         return await not_joined(client, message)
 
+    print(f"[START] ForceSub passed for {message.from_user.id}")
+
     if not present_user(client.bot_id, message.from_user.id):
+        print(f"[DB] Adding user {message.from_user.id}")
         add_user(client.bot_id, message.from_user.id)
 
     if len(message.text) <= 7:
+        print(f"[START] Sending welcome to {message.from_user.id}")
+
         return await message.reply_text(
-            START_MESSAGE.format(first=message.from_user.first_name),
+            START_MESSAGE.format(
+                first=message.from_user.first_name
+            ),
             reply_markup=InlineKeyboardMarkup([[
                 InlineKeyboardButton(
                     "👨‍💻 Admin",
