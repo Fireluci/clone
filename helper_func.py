@@ -58,6 +58,14 @@ def get_message_id(client, message):
     chat = message.forward_from_chat
     if chat:
         return message.forward_from_message_id if chat.id == client.db_channel.id else 0
+
+    origin = getattr(message, "forward_origin", None)
+    if origin:
+        origin_chat = getattr(origin, "chat", None)
+        origin_id = getattr(origin, "message_id", None)
+        if origin_chat and origin_id:
+            return origin_id if origin_chat.id == client.db_channel.id else 0
+
     text = (message.text or "").strip()
     if message.forward_sender_name or not text:
         return 0

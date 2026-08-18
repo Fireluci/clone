@@ -3,7 +3,7 @@ from pyrogram import filters
 from pyrogram.handlers import MessageHandler, CallbackQueryHandler
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from bot import StoreBot
-from config import OWNER, ADMINS, BOTTOKEN
+from config import OWNER, ADMINS, BOTTOKEN, FILES, FORCESUB, SHORTSITE, SHORTAPI
 from database import clone_id, save_clone, get_clone, get_clones, delete_clone, get_setting
 
 workers = {}
@@ -60,7 +60,7 @@ async def clone(client, message):
 
 
 async def mybots(client, message):
-    if not manager_admin(message.from_user.id):
+    if not owner(message.from_user.id):
         return
     docs = get_clones()
     if not docs:
@@ -110,11 +110,11 @@ async def manager_callbacks(client, query):
             await query.answer("Clone not found.", show_alert=True)
             return
         worker = workers.get(bot_id)
-        site = get_setting(bot_id, "shortsite", "")
-        api = get_setting(bot_id, "shortapi", "")
-        files = get_setting(bot_id, "files", 0)
-        forcesub = get_setting(bot_id, "forcesub", 0)
-        admins = get_setting(bot_id, "admins", [])
+        site = get_setting(bot_id, "shortsite", SHORTSITE)
+        api = get_setting(bot_id, "shortapi", SHORTAPI)
+        files = get_setting(bot_id, "files", FILES)
+        forcesub = get_setting(bot_id, "forcesub", FORCESUB)
+        admins = get_setting(bot_id, "admins", ADMINS)
         status = "🟢 Running" if worker else "🔴 Stopped"
         text = (
             f"<b>Clone Settings</b>\n\n"

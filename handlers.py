@@ -1,11 +1,13 @@
 import asyncio
 import re
 import aiohttp
+
 from pyrogram import filters
+from pyrogram.handlers import MessageHandler, CallbackQueryHandler
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.errors import FloodWait, UserIsBlocked, InputUserDeactivated
 
-from config import START_MESSAGE, FORCE_SUB_MESSAGE, SHORTSITE, SHORTAPI
+from config import START_MESSAGE, FORCE_SUB_MESSAGE, SHORTSITE, SHORTAPI, ADMINS
 from helper_func import encode, decode, get_messages, get_message_id, is_admin, is_subscribed
 from database import (
     present_user, add_user, delete_user, all_users, user_count,
@@ -14,29 +16,15 @@ from database import (
 
 
 def register(client):
-    client.add_handler(__import__("pyrogram").handlers.MessageHandler(
-        start, filters.command("start") & filters.private
-    ))
-    client.add_handler(__import__("pyrogram").handlers.MessageHandler(
-        broadcast, filters.command("broadcast") & filters.private
-    ))
-    client.add_handler(__import__("pyrogram").handlers.MessageHandler(
-        stats, filters.command("stats") & filters.private
-    ))
-    client.add_handler(__import__("pyrogram").handlers.MessageHandler(
-        shortener_cmd, filters.command(["shortener", "shortlink"]) & filters.private
-    ))
-    client.add_handler(__import__("pyrogram").handlers.MessageHandler(
-        batch, filters.command("batch") & filters.private
-    ))
-    client.add_handler(__import__("pyrogram").handlers.MessageHandler(
-        batch_input, filters.private
-    ))
-    client.add_handler(__import__("pyrogram").handlers.MessageHandler(
-        auto_shortener,
-        (filters.text | filters.caption) & filters.private
-    ))
-    client.add_handler(__import__("pyrogram").handlers.CallbackQueryHandler(callbacks))
+    client.add_handler(MessageHandler(start, filters.command("start") & filters.private))
+    client.add_handler(MessageHandler(broadcast, filters.command("broadcast") & filters.private))
+    client.add_handler(MessageHandler(stats, filters.command("stats") & filters.private))
+    client.add_handler(MessageHandler(shortener_cmd, filters.command(["shortener", "shortlink"]) & filters.private))
+    client.add_handler(MessageHandler(batch, filters.command("batch") & filters.private))
+    client.add_handler(MessageHandler(genlink, filters.command("genlink") & filters.private))
+    client.add_handler(MessageHandler(batch_input, filters.private))
+    client.add_handler(MessageHandler(auto_shortener, (filters.text | filters.caption) & filters.private))
+    client.add_handler(CallbackQueryHandler(callbacks))
 
 
 async def start(client, message):
@@ -72,6 +60,8 @@ async def start(client, message):
         else:
             return
 
+        if len(ids) > 100:
+            return await message.reply("This link contains too many files.")
         messages = await get_messages(client, ids)
 
     except Exception:
@@ -88,8 +78,8 @@ async def start(client, message):
         except FloodWait as e:
             await asyncio.sleep(e.value)
 
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"File send error: {e}")
 
 
 async def not_joined(client, message):
@@ -117,73 +107,60 @@ async def not_joined(client, message):
 async def broadcast(client, message):
     if not is_admin(client, message.from_user.id):
         return
-
     if not message.reply_to_message:
         return await message.reply("Reply to a message.")
-
     if getattr(client, "broadcast_running", False):
         return await message.reply("A broadcast is already running.")
 
+    total = user_count(client.bot_id)
     users = all_users(client.bot_id)
-
     client.broadcast_running = True
     client.broadcast_cancelled = False
 
     cancel = InlineKeyboardMarkup([[
-        InlineKeyboardButton(
-            "❌ Cancel",
-            callback_data="cancel_broadcast"
-        )
+        InlineKeyboardButton("❌ Cancel", callback_data="cancel_broadcast")
     ]])
 
     status = await message.reply(
-        f"<b>Broadcasting...</b>\n\n"
-        f"Total: <code>{len(users)}</code>\n"
-        f"Sent: <code>0</code>",
+        f"<b>Broadcasting...</b>\n\nTotal: <code>{total}</code>\nSent: <code>0</code>",
         reply_markup=cancel
     )
 
     sent = failed = blocked = deleted = 0
 
     try:
-        for user_id in users:
+        for user in users:
             if client.broadcast_cancelled:
                 break
 
+            user_id = user["_id"]
             try:
                 await message.reply_to_message.copy(user_id)
                 sent += 1
-
             except FloodWait as e:
                 await asyncio.sleep(e.value)
-
                 if client.broadcast_cancelled:
                     break
-
                 try:
                     await message.reply_to_message.copy(user_id)
                     sent += 1
                 except Exception:
                     failed += 1
-
             except UserIsBlocked:
                 delete_user(client.bot_id, user_id)
                 blocked += 1
-
             except InputUserDeactivated:
                 delete_user(client.bot_id, user_id)
                 deleted += 1
-
             except Exception:
                 failed += 1
 
             processed = sent + failed + blocked + deleted
-
             if processed % 25 == 0:
                 try:
                     await status.edit(
                         f"<b>Broadcasting...</b>\n\n"
-                        f"Total: <code>{len(users)}</code>\n"
+                        f"Total: <code>{total}</code>\n"
                         f"Sent: <code>{sent}</code>\n"
                         f"Failed: <code>{failed}</code>",
                         reply_markup=cancel
@@ -192,23 +169,16 @@ async def broadcast(client, message):
                     pass
 
         processed = sent + failed + blocked + deleted
-
-        title = (
-            "Broadcast Cancelled"
-            if client.broadcast_cancelled
-            else "Broadcast Completed"
-        )
-
+        title = "Broadcast Cancelled" if client.broadcast_cancelled else "Broadcast Completed"
         await status.edit(
             f"<b>{title}</b>\n\n"
-            f"Total: <code>{len(users)}</code>\n"
+            f"Total: <code>{total}</code>\n"
             f"Sent: <code>{sent}</code>\n"
             f"Blocked: <code>{blocked}</code>\n"
             f"Deleted: <code>{deleted}</code>\n"
             f"Failed: <code>{failed}</code>\n"
-            f"Remaining: <code>{len(users) - processed}</code>"
+            f"Remaining: <code>{max(0, total - processed)}</code>"
         )
-
     finally:
         client.broadcast_running = False
         client.broadcast_cancelled = False
@@ -264,67 +234,73 @@ async def shortener_cmd(client, message):
 async def batch(client, message):
     if not is_admin(client, message.from_user.id):
         return
+    if not hasattr(client, "input_states"):
+        client.input_states = {}
+    client.input_states[message.from_user.id] = {"mode": "batch", "step": 1}
+    await message.reply("Forward first DB message or send its link.")
 
-    if not hasattr(client, "batch_state"):
-        client.batch_state = {}
 
-    client.batch_state[message.from_user.id] = {
-        "step": 1
-    }
-
-    await message.reply(
-        "Forward first DB message or send its link."
-    )
+async def genlink(client, message):
+    if not is_admin(client, message.from_user.id):
+        return
+    if not hasattr(client, "input_states"):
+        client.input_states = {}
+    client.input_states[message.from_user.id] = {"mode": "genlink", "step": 1}
+    await message.reply("Forward DB message or send its link.")
 
 
 async def batch_input(client, message):
-    if not is_admin(client, message.from_user.id):
+    user_id = message.from_user.id
+    if not is_admin(client, user_id):
         return
 
-    state = getattr(client, "batch_state", {}).get(
-        message.from_user.id
-    )
-
+    state = getattr(client, "input_states", {}).get(user_id)
     if not state:
         return
 
-    msg_id = await get_message_id(client, message)
-
+    msg_id = get_message_id(client, message)
     if not msg_id:
         return await message.reply(
-            "Invalid DB message."
+            "❌ Invalid DB message. Forward a message from the FILES channel or send its link."
         )
 
-    user_id = message.from_user.id
+    if state["mode"] == "genlink":
+        client.input_states.pop(user_id, None)
+        raw = f"get-{msg_id * abs(client.db_channel.id)}"
+        link = f"https://telegram.me/{client.username}?start={await encode(raw)}"
+        slink = await get_shortlink(client, link)
+        return await message.reply(
+            f"<b>Link:</b> {link}\n\n<b>Slink:</b> {slink}",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("Share Link", url=f"https://telegram.me/share/url?url={link}"),
+                InlineKeyboardButton("Share Slink", url=f"https://telegram.me/share/url?url={slink}")
+            ]])
+        )
 
     if state["step"] == 1:
-        client.batch_state[user_id] = {
+        client.input_states[user_id] = {
+            "mode": "batch",
             "step": 2,
             "first_id": msg_id
         }
-
-        return await message.reply(
-            "Forward last DB message or send its link."
-        )
+        return await message.reply("Forward last DB message or send its link.")
 
     first_id = state["first_id"]
-    client.batch_state.pop(user_id, None)
+    client.input_states.pop(user_id, None)
 
-    raw = (
-        f"get-{first_id * abs(client.db_channel.id)}"
-        f"-{msg_id * abs(client.db_channel.id)}"
-    )
+    if msg_id < first_id:
+        first_id, msg_id = msg_id, first_id
 
-    link = (
-        f"https://telegram.me/{client.username}"
-        f"?start={await encode(raw)}"
-    )
-
+    raw = f"get-{first_id * abs(client.db_channel.id)}-{msg_id * abs(client.db_channel.id)}"
+    link = f"https://telegram.me/{client.username}?start={await encode(raw)}"
     slink = await get_shortlink(client, link)
 
     await message.reply(
-        f"<b>Link:</b> {link}\n\n"
-        f"<b>Slink:</b> {slink}"
+        f"<b>Link:</b> {link}\n\n<b>Slink:</b> {slink}",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("Share Link", url=f"https://telegram.me/share/url?url={link}"),
+            InlineKeyboardButton("Share Slink", url=f"https://telegram.me/share/url?url={slink}")
+        ]])
     )
 
 
@@ -332,7 +308,7 @@ async def auto_shortener(client, message):
     if not is_admin(client, message.from_user.id):
         return
 
-    if message.command:
+    if message.command or getattr(client, "input_states", {}).get(message.from_user.id):
         return
 
     original = message.text or message.caption
@@ -383,7 +359,7 @@ async def get_shortlink(client, link):
     URL = custom_site or SHORTSITE
 
     API = str(API).strip()
-    URL = str(URL).strip().rstrip("/")
+    URL = str(URL).strip().replace("https://", "").replace("http://", "").rstrip("/")
 
     link = link.replace("http://", "https://", 1)
 
@@ -400,7 +376,7 @@ async def get_shortlink(client, link):
         }
 
         try:
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
                 async with session.get(
                     url,
                     params=params,
@@ -434,7 +410,7 @@ async def get_shortlink(client, link):
     }
 
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
             async with session.get(
                 url,
                 params=params,
@@ -483,5 +459,3 @@ async def callbacks(client, query):
         client.broadcast_cancelled = True
         await query.answer("Broadcast cancelled.")
 
-    elif query.data == "close":
-        await query.message.delete()
