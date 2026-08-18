@@ -1,35 +1,121 @@
+import hashlib
 from pymongo import MongoClient
-from config import MONGODB, DBNAME
+from config import MONGODB, DBNAME, FILES, FORCESUB, SHORTSITE, SHORTAPI, ADMINS
 
-client = MongoClient(MONGODB)
-db = client[DBNAME]
-clones = db["clones"]
+if not MONGODB:
+    raise RuntimeError("MONGODB is missing")
+if not DBNAME:
+    raise RuntimeError("DBNAME is missing")
+
+mongo = MongoClient(MONGODB, serverSelectionTimeoutMS=10000)
+main_db = mongo[DBNAME]
+clones = main_db["clones"]
+
+
+def clone_id(token):
+    return hashlib.sha256(token.encode()).hexdigest()[:12]
+
+
+def clone_db(bot_id):
+    item = clones.find_one({"_id": bot_id}, {"database": 1})
+    return mongo[item.get("database", f"clone_{bot_id}")] if item else mongo[f"clone_{bot_id}"]
 
 
 def users(bot_id):
-    return db[f"bot_{bot_id}_users"]
+    return clone_db(bot_id)["users"]
 
 
 def settings(bot_id):
-    return db[f"bot_{bot_id}_config"]
+    return clone_db(bot_id)["config"]
+
+
+def save_clone(bot_id, token, username):
+    data = {
+        "_id": bot_id,
+        "token": token,
+        "username": username,
+        "database": f"clone_{bot_id}",
+        "settings": {
+            "files": FILES,
+            "forcesub": FORCESUB,
+            "shortsite": SHORTSITE,
+            "shortapi": SHORTAPI,
+            "admins": ADMINS,
+        },
+    }
+    clones.replace_one({"_id": bot_id}, data, upsert=True)
+    settings(bot_id).replace_one({"_id": "settings"}, data["settings"], upsert=True)
+    return data
+
+
+def get_clone(bot_id):
+    return clones.find_one({"_id": bot_id})
+
+
+def get_clones():
+    return list(clones.find())
+
+
+def delete_clone(bot_id):
+    clones.delete_one({"_id": bot_id})
+    mongo.drop_database(f"clone_{bot_id}")
+
+
+def get_setting(bot_id, key, default=None):
+    item = settings(bot_id).find_one({"_id": "settings"}) or {}
+    return item.get(key, default)
+
+
+def set_setting(bot_id, key, value):
+    settings(bot_id).update_one({"_id": "settings"}, {"$set": {key: value}}, upsert=True)
+
+
+def present_user(bot_id, user_id):
+    return users(bot_id).find_one({"_id": user_id}) is not None
 
 
 def add_user(bot_id, user_id):
-    users(bot_id).update_one({"_id": user_id}, {"$set": {"_id": user_id}}, upsert=True)
+    users(bot_id).update_one({"_id": user_id}, {"$setOnInsert": {"_id": user_id}}, upsert=True)
+
+
+def delete_user(bot_id, user_id):
+    users(bot_id).delete_one({"_id": user_id})
 
 
 def all_users(bot_id):
     return [x["_id"] for x in users(bot_id).find({}, {"_id": 1})]
 
 
-def remove_user(bot_id, user_id):
-    users(bot_id).delete_one({"_id": user_id})
+def user_count(bot_id):
+    return users(bot_id).count_documents({})
 
 
-def get_settings(bot_id):
-    doc = settings(bot_id).find_one({"_id": "settings"}) or {}
-    return doc
+def database_storage(db):
+    total = 0
+    for name in db.list_collection_names():
+        try:
+            s = db.command("collStats", name)
+            total += s.get("storageSize", 0) + s.get("totalIndexSize", 0)
+        except Exception:
+            pass
+    return total
 
 
-def set_settings(bot_id, values):
-    settings(bot_id).update_one({"_id": "settings"}, {"$set": values}, upsert=True)
+def cluster_storage():
+    total = database_storage(main_db)
+    for item in clones.find({}, {"database": 1}):
+        total += database_storage(mongo[item.get("database", "")])
+    return total
+
+
+def collection_storage(bot_id):
+    return database_storage(clone_db(bot_id))
+
+
+def shortener(bot_id):
+    return get_setting(bot_id, "shortsite", SHORTSITE), get_setting(bot_id, "shortapi", SHORTAPI)
+
+
+def set_shortener(bot_id, site, api):
+    set_setting(bot_id, "shortsite", site)
+    set_setting(bot_id, "shortapi", api)

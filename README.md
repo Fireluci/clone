@@ -1,43 +1,47 @@
-# Multi File Store Bot
+# MultiClone File Store Bot
 
-One main manager bot can run multiple file-store clone bots in the same Koyeb instance.
+One Koyeb instance can run a manager bot and multiple file-store clones.
 
 ## Environment variables
 
-- `BOTTOKEN` - main manager bot token
-- `MONGODB` - MongoDB connection URI
-- `DBNAME` - MongoDB database name
-- `APP_ID` - Telegram API ID
-- `API_HASH` - Telegram API hash
-- `OWNER` - main manager owner ID
-- `ADMINS` - default clone admins, space separated IDs
-- `FILES` - default files/database channel ID
-- `FORCESUB` - default force-sub channel ID
-- `SHORTSITE` - default shortener site
-- `SHORTAPI` - default shortener API
-- `WORKERS` - Pyrogram workers
-- `PORT` - web health-check port
+Set these on Koyeb for the manager/defaults:
 
-## Manager commands
+- `BOTTOKEN` — manager bot token
+- `MONGODB` — MongoDB cluster URI
+- `DBNAME` — manager database name
+- `APP_ID`
+- `API_HASH`
+- `OWNER`
+- `FILES` — default file database channel
+- `FORCESUB` — default force-sub channel, or `0`
+- `SHORTSITE` — default shortener
+- `SHORTAPI` — default shortener API
+- `ADMINS` — default admin IDs separated by spaces
+- `WORKERS`
+- `PORT`
 
-`/clone BOT_TOKEN` - add and start a clone
+The manager token is the only bot token stored in Koyeb. Clone tokens are added with `/clone BOT_TOKEN` and saved in MongoDB.
 
-`/mybots` - list clones
+Each clone gets its own MongoDB database named `clone_<id>`. Its `users` and `config` collections are isolated from other clones. Clone settings are initialized from the defaults and can be edited directly in MongoDB.
 
-`/deletebot BOT_ID` - stop and remove a clone
+## Commands
 
-## Clone commands
+Manager:
 
-`/genlink` - generate a file link
+- `/clone BOT_TOKEN`
+- `/mybots`
+- `/deletebot BOT_ID`
 
-`/batch` - generate a batch link
+Clone:
 
-`/shortener site.com API` - change only that clone's shortener
+- `/start`
+- `/genlink`
+- `/batch`
+- `/shortener`
+- `/shortener site.com API`
+- `/broadcast`
+- `/stats`
 
-`/shortener` - show that clone's current shortener
+## Existing links
 
-`/broadcast` - broadcast a replied message
-
-`/stats` - show users and MongoDB usage
-
-Clone-specific overrides are stored in `bot_<bot_id>_config`. If a value is absent, the default from `config.py` is used.
+The link encoding/decoding format is kept compatible with the original bot. Existing links continue to work when the old bot token and its original `FILES` channel are kept on the clone.
