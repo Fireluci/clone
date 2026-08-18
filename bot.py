@@ -14,9 +14,9 @@ class StoreBot:
         self.username = None
         self.db_channel = None
         self.invitelink = None
-        self.files = 0
-        self.forcesub = 0
-        self.admins = []
+        self.files = int(self.value("files", FILES))
+        self.forcesub = int(self.value("forcesub", FORCESUB))
+        self.admins = [int(x) for x in self.value("admins", ADMINS)]
         self.uptime = None
 
     def value(self, key, default):
