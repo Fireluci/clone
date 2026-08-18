@@ -15,6 +15,7 @@ def register(client):
     client.add_handler(__import__("pyrogram").handlers.MessageHandler(stats, filters.command("stats") & filters.private))
     client.add_handler(__import__("pyrogram").handlers.MessageHandler(shortener_cmd, filters.command(["shortener", "shortlink"]) & filters.private))
     client.add_handler(__import__("pyrogram").handlers.MessageHandler(batch, filters.command("batch") & filters.private))
+    client.add_handler(__import__("pyrogram").handlers.MessageHandler(batch_input, filters.private))
     client.add_handler(__import__("pyrogram").handlers.MessageHandler(genlink, filters.command("genlink") & filters.private))
     client.add_handler(__import__("pyrogram").handlers.MessageHandler(auto_shortener, (filters.text | filters.caption) & filters.private))
     client.add_handler(__import__("pyrogram").handlers.CallbackQueryHandler(callbacks))
