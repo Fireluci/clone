@@ -1,5 +1,4 @@
 from datetime import datetime
-from pyromod import listen
 from pyrogram import Client
 from pyrogram.enums import ParseMode
 from config import APP_ID, API_HASH, WORKERS, FILES, FORCESUB, ADMINS
@@ -20,9 +19,9 @@ class StoreBot:
         self.username = None
         self.db_channel = None
         self.invitelink = None
-        self.files = int(self.value("files", FILES))
-        self.forcesub = int(self.value("forcesub", FORCESUB))
-        self.admins = [int(x) for x in self.value("admins", ADMINS)]
+        self.files = FILES
+        self.forcesub = FORCESUB
+        self.admins = ADMINS[:]
         self.uptime = None
 
     def value(self, key, default):
@@ -51,8 +50,6 @@ class StoreBot:
 
         try:
             self.db_channel = await self.client.get_chat(self.files)
-            test = await self.client.send_message(self.db_channel.id, "test")
-            await test.delete()
         except Exception as e:
             await self.stop()
             raise RuntimeError(f"Cannot access FILES channel: {e}")

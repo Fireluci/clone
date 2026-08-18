@@ -57,8 +57,9 @@ def get_clones():
 
 
 def delete_clone(bot_id):
+    item = clones.find_one({"_id": bot_id}, {"database": 1})
     clones.delete_one({"_id": bot_id})
-    mongo.drop_database(f"clone_{bot_id}")
+    mongo.drop_database(item.get("database", f"clone_{bot_id}") if item else f"clone_{bot_id}")
 
 
 def get_setting(bot_id, key, default=None):
@@ -83,7 +84,7 @@ def delete_user(bot_id, user_id):
 
 
 def all_users(bot_id):
-    return [x["_id"] for x in users(bot_id).find({}, {"_id": 1})]
+    return users(bot_id).find({}, {"_id": 1}, batch_size=500)
 
 
 def user_count(bot_id):
@@ -104,7 +105,9 @@ def database_storage(db):
 def cluster_storage():
     total = database_storage(main_db)
     for item in clones.find({}, {"database": 1}):
-        total += database_storage(mongo[item.get("database", "")])
+        name = item.get("database")
+        if name:
+            total += database_storage(mongo[name])
     return total
 
 
