@@ -1,20 +1,20 @@
-import logging
 import os
+import logging
 
-BOTTOKEN = os.getenv("BOTTOKEN", "")
-MONGODB = os.getenv("MONGODB", "")
-DBNAME = os.getenv("DBNAME", "")
+BOTTOKEN = os.getenv("BOTTOKEN", "8191103559:AAHL8HM-MgOPT-AakHL_37mtLaor0XEElDk")
+MONGODB = os.getenv("MONGODB", "mongodb+srv://herostore:herostore@herostore.ywtvule.mongodb.net/?appName=herostore")
+
 APP_ID = int(os.getenv("APP_ID", "1736204"))
-API_HASH = os.getenv("API_HASH", "")
-OWNER = int(os.getenv("OWNER", "0"))
-FILES = int(os.getenv("FILES", "0"))
+API_HASH = os.getenv("API_HASH", "890d40e0f91a4de32dec2965444b2cbe")
+
+OWNER = int(os.getenv("OWNER", "1058015838"))
+FILES = int(os.getenv("FILES", "-1001205507869"))
 FORCESUB = int(os.getenv("FORCESUB", "0"))
+
 SHORTSITE = os.getenv("SHORTSITE", "nowshort.com")
-SHORTAPI = os.getenv("SHORTAPI", "")
-ADMINS = [int(x) for x in os.getenv("ADMINS", str(OWNER)).split() if x.strip().lstrip("-").isdigit()]
-if OWNER and OWNER not in ADMINS:
-    ADMINS.append(OWNER)
-WORKERS = int(os.getenv("WORKERS", "4"))
+SHORTAPI = os.getenv("SHORTAPI", "c576b9cdd34ceb572a8df1f57eabf7c11efbda3a")
+
+ADMINS = [5051689666, 1058015838, 6012123382]
 PORT = int(os.getenv("PORT", "8080"))
 
 START_MESSAGE = "Hello {first}\n\nI can store private files and give you access links."
