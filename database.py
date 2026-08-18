@@ -1,5 +1,4 @@
 import hashlib
-import time
 from pymongo import MongoClient
 from config import MONGODB, DBNAME, FILES, FORCESUB, SHORTSITE, SHORTAPI, ADMINS
 
@@ -11,7 +10,6 @@ if not DBNAME:
 mongo = MongoClient(MONGODB, serverSelectionTimeoutMS=10000)
 main_db = mongo[DBNAME]
 clones = main_db["clones"]
-_storage_cache = {"time": 0, "value": 0}
 
 
 def clone_id(token):
@@ -33,6 +31,9 @@ def settings(bot_id):
 
 def save_clone(bot_id, token, username):
     old = clones.find_one({"_id": bot_id}) or {}
+    current = settings(bot_id).find_one({"_id": "settings"}) or {}
+    current.pop("_id", None)
+
     defaults = {
         "files": FILES,
         "forcesub": FORCESUB,
@@ -40,8 +41,7 @@ def save_clone(bot_id, token, username):
         "shortapi": SHORTAPI,
         "admins": ADMINS,
     }
-    current = settings(bot_id).find_one({"_id": "settings"}) or {}
-    current.pop("_id", None)
+
     for key, value in defaults.items():
         current.setdefault(key, value)
 
@@ -52,6 +52,7 @@ def save_clone(bot_id, token, username):
         "database": old.get("database", f"clone_{bot_id}"),
         "settings": current,
     }
+
     clones.replace_one({"_id": bot_id}, data, upsert=True)
     settings(bot_id).replace_one({"_id": "settings"}, current, upsert=True)
     return data
@@ -112,17 +113,11 @@ def database_storage(db):
 
 
 def cluster_storage():
-    now = time.time()
-    if now - _storage_cache["time"] < 30:
-        return _storage_cache["value"]
-
     total = database_storage(main_db)
     for item in clones.find({}, {"database": 1}):
         name = item.get("database")
         if name:
             total += database_storage(mongo[name])
-
-    _storage_cache.update(time=now, value=total)
     return total
 
 
