@@ -21,7 +21,6 @@ def register(client):
     client.add_handler(MessageHandler(shortener_cmd, filters.command(["shortener", "shortlink"]) & filters.private))
     client.add_handler(MessageHandler(batch, filters.command("batch") & filters.private))
     client.add_handler(MessageHandler(genlink, filters.command("genlink") & filters.private))
-    client.add_handler(MessageHandler(batch_input, filters.private))
     client.add_handler(MessageHandler(auto_shortener, (filters.text | filters.caption) & filters.private))
     client.add_handler(CallbackQueryHandler(callbacks))
 
@@ -363,6 +362,10 @@ async def batch_input(client, message):
 async def auto_shortener(client, message):
     if not is_admin(client, message.from_user.id):
         return
+
+    # /batch and /genlink use the next private message as their input.
+    if getattr(client, "input_states", {}).get(message.from_user.id):
+        return await batch_input(client, message)
 
     if message.command or getattr(client, "input_states", {}).get(message.from_user.id):
         return
