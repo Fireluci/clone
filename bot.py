@@ -8,7 +8,13 @@ from database import get_setting
 
 class StoreBot:
     def __init__(self, name, token, bot_id):
-        self.client = Client(name=name, api_id=APP_ID, api_hash=API_HASH, bot_token=token, workers=WORKERS)
+        self.client = Client(
+            name=name,
+            api_id=APP_ID,
+            api_hash=API_HASH,
+            bot_token=token,
+            workers=WORKERS
+        )
         self.token = token
         self.bot_id = bot_id
         self.username = None
@@ -24,18 +30,20 @@ class StoreBot:
 
     async def start(self):
         await self.client.start()
+
         me = await self.client.get_me()
         self.username = me.username or me.first_name
         self.uptime = datetime.now()
+
         self.client.username = self.username
         self.client.uptime = self.uptime
         self.client.bot_id = self.bot_id
         self.client.store = self
         self.client.set_parse_mode(ParseMode.HTML)
 
-        self.files = int(self.value("files", 0))
-        self.forcesub = int(self.value("forcesub", 0))
-        self.admins = [int(x) for x in self.value("admins", [])]
+        self.files = int(self.value("files", FILES))
+        self.forcesub = int(self.value("forcesub", FORCESUB))
+        self.admins = [int(x) for x in self.value("admins", ADMINS)]
 
         if not self.files:
             await self.stop()
@@ -57,10 +65,14 @@ class StoreBot:
         if self.forcesub:
             try:
                 chat = await self.client.get_chat(self.forcesub)
-                self.invitelink = chat.invite_link or await self.client.export_chat_invite_link(self.forcesub)
+                self.invitelink = (
+                    chat.invite_link
+                    or await self.client.export_chat_invite_link(self.forcesub)
+                )
             except Exception as e:
                 await self.stop()
                 raise RuntimeError(f"Cannot access FORCESUB channel: {e}")
+
         self.client.invitelink = self.invitelink
 
         print(f"Started @{self.username}")
@@ -68,5 +80,5 @@ class StoreBot:
     async def stop(self):
         try:
             await self.client.stop()
-        except Exception:
+        except:
             pass
