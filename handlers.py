@@ -144,22 +144,44 @@ async def shortener_cmd(client, message):
 async def batch(client, message):
     if not is_admin(client, message.from_user.id):
         return
+
     try:
-        first = await client.ask(message.chat.id, "Forward first DB message or send its link.", filters=(filters.forwarded | (filters.text & ~filters.forwarded)), timeout=60)
+        first = await client.ask(
+            message.chat.id,
+            "Forward first DB message or send its link.",
+            filters=filters.forwarded | filters.text,
+            timeout=60
+        )
+
         first_id = await get_message_id(client, first)
+
         if not first_id:
             return await first.reply("Invalid DB message.")
-        last = await client.ask(message.chat.id, "Forward last DB message or send its link.", filters=(filters.forwarded | (filters.text & ~filters.forwarded)), timeout=60)
+
+        last = await client.ask(
+            message.chat.id,
+            "Forward last DB message or send its link.",
+            filters=filters.forwarded | filters.text,
+            timeout=60
+        )
+
         last_id = await get_message_id(client, last)
+
         if not last_id:
             return await last.reply("Invalid DB message.")
-    except Exception:
-        return
 
-    raw = f"get-{first_id * abs(client.db_channel.id)}-{last_id * abs(client.db_channel.id)}"
-    link = f"https://telegram.me/{client.username}?start={await encode(raw)}"
-    slink = await get_shortlink(client, link)
-    await last.reply(f"<b>Link:</b> {link}\n\n<b>Slink:</b> {slink}")
+        raw = f"get-{first_id * abs(client.db_channel.id)}-{last_id * abs(client.db_channel.id)}"
+        link = f"https://telegram.me/{client.username}?start={await encode(raw)}"
+        slink = await get_shortlink(client, link)
+
+        await last.reply(
+            f"<b>Link:</b> {link}\n\n<b>Slink:</b> {slink}"
+        )
+
+    except Exception as e:
+        await message.reply(
+            f"<b>Batch error:</b>\n<code>{e}</code>"
+        )
 
 
 async def genlink(client, message):
