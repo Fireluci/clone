@@ -2,7 +2,7 @@ from datetime import datetime
 from pyromod import listen
 from pyrogram import Client
 from pyrogram.enums import ParseMode
-from config import APP_ID, API_HASH, WORKERS
+from config import APP_ID, API_HASH, WORKERS, FILES, FORCESUB, ADMINS
 from database import get_setting
 
 
