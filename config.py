@@ -3,10 +3,10 @@ import logging
 
 BOTTOKEN = os.getenv("BOTTOKEN", "8191103559:AAHL8HM-MgOPT-AakHL_37mtLaor0XEElDk")
 MONGODB = os.getenv("MONGODB", "mongodb+srv://herostore:herostore@herostore.ywtvule.mongodb.net/?appName=herostore")
-
+DBNAME = os.getenv("DBNAME", "manager")
 APP_ID = int(os.getenv("APP_ID", "1736204"))
 API_HASH = os.getenv("API_HASH", "890d40e0f91a4de32dec2965444b2cbe")
-
+WORKERS = int(os.getenv("WORKERS", "4"))
 OWNER = int(os.getenv("OWNER", "1058015838"))
 FILES = int(os.getenv("FILES", "-1001205507869"))
 FORCESUB = int(os.getenv("FORCESUB", "0"))
