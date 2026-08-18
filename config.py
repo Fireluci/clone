@@ -20,11 +20,11 @@ ADMINS = [5051689666, 1058015838, 6012123382]
 WORKERS = int(os.getenv("WORKERS", "4"))
 PORT = int(os.getenv("PORT", "8080"))
 
-START_MESSAGE = """<b>🌟 Hello {user},
+START_MESSAGE = """<b>🌟 Hello {first},
 
 I'm A File Store Bot 🤖 designed to provide files 📁 and links 🔗</b>"""
 
-FORCE_SUB_MESSAGE = """<b>🌟 Hello {user},
+FORCE_SUB_MESSAGE = """<b>🌟 Hello {first},
 
 You need to join our channel to use this bot.</b>"""
 
