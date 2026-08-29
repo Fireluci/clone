@@ -1,6 +1,7 @@
 import asyncio
 import re
 import aiohttp
+import logging
 from pyrogram import filters
 from pyrogram.handlers import MessageHandler, CallbackQueryHandler
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -12,6 +13,8 @@ from database import (
     present_user, add_user, delete_user, all_users, user_count,
     collection_storage, cluster_storage, set_shortener, shortener
 )
+
+LOGGER = logging.getLogger(__name__)
 
 
 def register(client):
@@ -38,9 +41,9 @@ async def start(client, message):
 
     print(f"[START] ForceSub passed for {message.from_user.id}")
 
-    if not present_user(client.bot_id, message.from_user.id):
-        print(f"[DB] Adding user {message.from_user.id}")
-        add_user(client.bot_id, message.from_user.id)
+    if not await asyncio.to_thread(present_user, client.bot_id, message.from_user.id):
+        LOGGER.info("Adding user %s to bot %s", message.from_user.id, client.bot_id)
+        await asyncio.to_thread(add_user, client.bot_id, message.from_user.id)
 
     if len(message.text) <= 7:
         print(f"[START] Sending welcome to {message.from_user.id}")
@@ -78,6 +81,7 @@ async def start(client, message):
         messages = await get_messages(client, ids)
 
     except Exception:
+        LOGGER.exception("Invalid start link for bot %s", client.bot_id)
         return await message.reply("Invalid link.")
 
     for msg in messages:
@@ -91,8 +95,8 @@ async def start(client, message):
         except FloodWait as e:
             await asyncio.sleep(e.value)
 
-        except Exception as e:
-            print(f"File send error: {e}")
+        except Exception:
+            LOGGER.exception("File send error for bot %s", client.bot_id)
 
 
 async def not_joined(client, message):
@@ -127,8 +131,8 @@ async def broadcast(client, message):
     if getattr(client, "broadcast_running", False):
         return await message.reply("A broadcast is already running.")
 
-    total = user_count(client.bot_id)
-    users = all_users(client.bot_id)
+    total = await asyncio.to_thread(user_count, client.bot_id)
+    users = await asyncio.to_thread(all_users, client.bot_id)
 
     client.broadcast_running = True
     client.broadcast_cancelled = False
@@ -169,17 +173,19 @@ async def broadcast(client, message):
                     await message.reply_to_message.copy(user_id)
                     sent += 1
                 except Exception:
+                    LOGGER.exception("Broadcast retry failed for user %s on bot %s", user_id, client.bot_id)
                     failed += 1
 
             except UserIsBlocked:
-                delete_user(client.bot_id, user_id)
+                await asyncio.to_thread(delete_user, client.bot_id, user_id)
                 blocked += 1
 
             except InputUserDeactivated:
-                delete_user(client.bot_id, user_id)
+                await asyncio.to_thread(delete_user, client.bot_id, user_id)
                 deleted += 1
 
             except Exception:
+                LOGGER.exception("Broadcast failed for user %s on bot %s", user_id, client.bot_id)
                 failed += 1
 
             processed = sent + failed + blocked + deleted
@@ -194,7 +200,7 @@ async def broadcast(client, message):
                         reply_markup=cancel
                     )
                 except Exception:
-                    pass
+                    LOGGER.exception("Failed to update broadcast status for bot %s", client.bot_id)
 
         processed = sent + failed + blocked + deleted
 
@@ -223,8 +229,8 @@ async def stats(client, message):
     if not is_admin(client, message.from_user.id):
         return
 
-    mine = collection_storage(client.bot_id)
-    total = cluster_storage()
+    mine = await asyncio.to_thread(collection_storage, client.bot_id)
+    total = await asyncio.to_thread(cluster_storage)
     other = max(0, total - mine)
     left = max(0, 512 * 1024 * 1024 - total)
 
@@ -235,7 +241,7 @@ async def stats(client, message):
 
     await message.reply(
         f"<b>Bot Stats</b>\n\n"
-        f"Users: <code>{user_count(client.bot_id)}</code>\n\n"
+        f"Users: <code>{await asyncio.to_thread(user_count, client.bot_id)}</code>\n\n"
         f"This bot: <code>{size(mine)}</code>\n"
         f"Other bots: <code>{size(other)}</code>\n"
         f"MongoDB: <code>{size(total)} / 512 MB</code>\n"
@@ -250,14 +256,14 @@ async def shortener_cmd(client, message):
     args = message.text.split(maxsplit=2)
 
     if len(args) == 3:
-        set_shortener(client.bot_id, args[1], args[2])
+        await asyncio.to_thread(set_shortener, client.bot_id, args[1], args[2])
         return await message.reply(
             f"<b>Shortener Updated</b>\n\n"
             f"Site: <code>{args[1]}</code>\n"
             f"API: <code>{args[2]}</code>"
         )
 
-    site, api = shortener(client.bot_id)
+    site, api = await asyncio.to_thread(shortener, client.bot_id)
 
     await message.reply(
         f"<b>Current Shortener</b>\n\n"
@@ -425,8 +431,16 @@ async def auto_shortener(client, message):
     )
 
 
+async def get_http_session(client):
+    session = getattr(client, "http_session", None)
+    if session is None or session.closed:
+        session = aiohttp.ClientSession()
+        client.http_session = session
+    return session
+
+
 async def get_shortlink(client, link):
-    custom_site, custom_api = shortener(client.bot_id)
+    custom_site, custom_api = await asyncio.to_thread(shortener, client.bot_id)
 
     API = custom_api or SHORTAPI
     URL = custom_site or SHORTSITE
@@ -449,13 +463,12 @@ async def get_shortlink(client, link):
         }
 
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    url,
-                    params=params,
-                    raise_for_status=True,
-                    ssl=False
-                ) as response:
+            session = await get_http_session(client)
+            async with session.get(
+                url,
+                params=params,
+                raise_for_status=True
+            ) as response:
 
                     data = await response.json(
                         content_type="text/html"
@@ -467,8 +480,8 @@ async def get_shortlink(client, link):
                             link
                         )
 
-        except Exception as e:
-            print(f"Shortener error: {e}")
+        except Exception:
+            LOGGER.exception("Shortener request failed for bot %s", client.bot_id)
 
         return (
             f"https://{URL}/shortLink"
@@ -483,13 +496,12 @@ async def get_shortlink(client, link):
     }
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                url,
-                params=params,
-                raise_for_status=True,
-                ssl=False
-            ) as response:
+        session = await get_http_session(client)
+        async with session.get(
+            url,
+            params=params,
+            raise_for_status=True
+        ) as response:
 
                 data = await response.json(
                     content_type=None
@@ -506,8 +518,8 @@ async def get_shortlink(client, link):
                     f"{data.get('message', data)}"
                 )
 
-    except Exception as e:
-        print(f"Shortener error: {e}")
+    except Exception:
+        LOGGER.exception("Shortener request failed for bot %s", client.bot_id)
 
     if URL == "clicksfly.com":
         return (

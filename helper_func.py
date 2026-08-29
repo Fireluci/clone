@@ -1,11 +1,14 @@
 import asyncio
 import base64
 import re
+import logging
 from pyrogram import filters
 from pyrogram.enums import ChatMemberStatus
 from pyrogram.errors import FloodWait
 from pyrogram.errors.exceptions.bad_request_400 import UserNotParticipant
 from config import FORCESUB, ADMINS
+
+LOGGER = logging.getLogger(__name__)
 
 
 def bot_admins(client):
@@ -26,6 +29,7 @@ async def is_subscribed(_, client, update):
     except UserNotParticipant:
         return False
     except Exception:
+        LOGGER.exception("ForceSub check failed for user %s on bot %s", update.from_user.id, getattr(client, "bot_id", "unknown"))
         return False
 
 
@@ -49,8 +53,12 @@ async def get_messages(client, message_ids):
         try:
             result.extend(await client.get_messages(client.db_channel.id, ids[i:i + 200]))
         except FloodWait as e:
+            LOGGER.warning("FloodWait while fetching messages for bot %s: %ss", getattr(client, "bot_id", "unknown"), e.value)
             await asyncio.sleep(e.value)
             result.extend(await client.get_messages(client.db_channel.id, ids[i:i + 200]))
+        except Exception:
+            LOGGER.exception("Failed to fetch messages for bot %s", getattr(client, "bot_id", "unknown"))
+            raise
     return result
 
 

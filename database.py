@@ -2,6 +2,8 @@ import hashlib
 from pymongo import MongoClient
 from config import MONGODB, DBNAME, FILES, FORCESUB, SHORTSITE, SHORTAPI, ADMINS
 
+LOGGER = __import__("logging").getLogger(__name__)
+
 if not MONGODB:
     raise RuntimeError("MONGODB is missing")
 if not DBNAME:
@@ -29,7 +31,7 @@ def settings(bot_id):
     return clone_db(bot_id)["config"]
 
 
-def save_clone(bot_id, token, username):
+def save_clone(bot_id, token, username, display_name=None):
     old = clones.find_one({"_id": bot_id}) or {}
     current = settings(bot_id).find_one({"_id": "settings"}) or {}
     current.pop("_id", None)
@@ -41,7 +43,6 @@ def save_clone(bot_id, token, username):
         "shortapi": SHORTAPI,
         "admins": ADMINS,
     }
-
     for key, value in defaults.items():
         current.setdefault(key, value)
 
@@ -49,10 +50,10 @@ def save_clone(bot_id, token, username):
         "_id": bot_id,
         "token": token,
         "username": username,
+        "display_name": display_name or old.get("display_name") or (f"@{username}" if username else "Unknown Bot"),
         "database": old.get("database", f"clone_{bot_id}"),
         "settings": current,
     }
-
     clones.replace_one({"_id": bot_id}, data, upsert=True)
     settings(bot_id).replace_one({"_id": "settings"}, current, upsert=True)
     return data
@@ -82,7 +83,7 @@ def set_setting(bot_id, key, value):
 
 
 def present_user(bot_id, user_id):
-    return users(bot_id).find_one({"_id": user_id}) is not None
+    return users(bot_id).find_one({"_id": user_id}, {"_id": 1}) is not None
 
 
 def add_user(bot_id, user_id):
@@ -94,7 +95,7 @@ def delete_user(bot_id, user_id):
 
 
 def all_users(bot_id):
-    return users(bot_id).find({}, {"_id": 1}, batch_size=500)
+    return list(users(bot_id).find({}, {"_id": 1}, batch_size=500))
 
 
 def user_count(bot_id):
@@ -108,7 +109,7 @@ def database_storage(db):
             s = db.command("collStats", name)
             total += s.get("storageSize", 0) + s.get("totalIndexSize", 0)
         except Exception:
-            pass
+            LOGGER.exception("Failed to read collection stats for %s", name)
     return total
 
 
