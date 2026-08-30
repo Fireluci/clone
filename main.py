@@ -5,7 +5,8 @@ from bot import StoreBot
 from config import BOTTOKEN, PORT, ADMINS, FORCESUB
 from database import get_clones, migrate_clone_id
 from handlers import register
-from manager import register_manager, workers
+import manager
+from manager import register_manager, workers, notify_owner
 
 LOGGER = logging.getLogger(__name__)
 
@@ -40,8 +41,10 @@ async def watchdog(manager):
             try:
                 LOGGER.warning("Manager disconnected; restarting")
                 await restart_manager(manager)
-            except Exception:
+                await notify_owner(f"🔄 <b>Manager Restarted</b>\n\nManager: @{manager.username}")
+            except Exception as e:
                 LOGGER.exception("Manager restart failed")
+                await notify_owner(f"❌ <b>Manager Restart Failed</b>\n\n<code>{e}</code>")
 
         for bot_id, worker in list(workers.items()):
             if worker.client.is_connected:
@@ -49,8 +52,10 @@ async def watchdog(manager):
             try:
                 LOGGER.warning("Clone %s disconnected; restarting", bot_id)
                 await worker.restart()
-            except Exception:
+                await notify_owner(f"🔄 <b>Clone Auto-Restarted</b>\n\nBot: @{worker.username or bot_id}\nID: <code>{bot_id}</code>")
+            except Exception as e:
                 LOGGER.exception("Clone %s restart failed", bot_id)
+                await notify_owner(f"❌ <b>Clone Restart Failed</b>\n\nBot: @{worker.username or bot_id}\nID: <code>{bot_id}</code>\nError: <code>{e}</code>")
 
 
 async def migrate_legacy_clones():
@@ -102,6 +107,8 @@ async def main():
         manager.client.forcesub = FORCESUB
         register_manager(manager.client)
         LOGGER.info("Manager started @%s", manager.username)
+        manager.manager_client = manager.client
+        await notify_owner(f"🟢 <b>Manager Online</b>\n\nManager: @{manager.username}")
 
         await migrate_legacy_clones()
 
@@ -111,8 +118,14 @@ async def main():
                 register(worker.client)
                 await worker.start()
                 workers[item["_id"]] = worker
-            except Exception:
+                await notify_owner(
+                    f"🟢 <b>Clone Online</b>\n\nBot: @{worker.username or item['_id']}\nID: <code>{item['_id']}</code>"
+                )
+            except Exception as e:
                 LOGGER.exception("Clone %s failed to start", item.get("_id"))
+                await notify_owner(
+                    f"❌ <b>Clone Failed To Start</b>\n\nID: <code>{item.get('_id')}</code>\nError: <code>{e}</code>"
+                )
 
         app = web.Application()
         app["manager"] = manager

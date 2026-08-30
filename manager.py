@@ -10,15 +10,25 @@ from database import clone_id, save_clone, get_clone, get_clones, delete_clone, 
 
 LOGGER = logging.getLogger(__name__)
 workers = {}
+manager_client = None
 TOKEN_RE = re.compile(r"^\d+:[A-Za-z0-9_-]{20,}$")
 
 
 def manager_admin(user_id):
-    return user_id == OWNER or user_id in ADMINS
+    return user_id == OWNER
 
 
 def owner(user_id):
     return user_id == OWNER
+
+
+async def notify_owner(text):
+    if manager_client is None:
+        return
+    try:
+        await manager_client.send_message(OWNER, text)
+    except Exception:
+        LOGGER.exception("Failed to notify owner")
 
 
 def bot_display_name(item):
@@ -100,7 +110,9 @@ async def clone(client, message):
         username = me.username or username
         await asyncio.to_thread(save_clone, bot_id, token, username, display_name)
         workers[bot_id] = worker
-        await message.reply(f"✅ Clone started: <b>{display_name}</b> (@{username})\nID: <code>{bot_id}</code>")
+        text = f"✅ Clone started: <b>{display_name}</b> (@{username})\nID: <code>{bot_id}</code>"
+        await message.reply(text)
+        await notify_owner(f"🤖 <b>Clone Started</b>\n\nBot: @{username}\nID: <code>{bot_id}</code>")
     except Exception as e:
         LOGGER.exception("Failed to create clone %s", bot_id)
         await worker.stop()
@@ -155,6 +167,7 @@ async def restartbot(client, message):
     try:
         await worker.restart()
         await message.reply(f"✅ Clone <code>{bot_id}</code> restarted.")
+        await notify_owner(f"🔄 <b>Clone Restarted</b>\n\nBot: @{worker.username or bot_id}\nID: <code>{bot_id}</code>")
     except Exception as e:
         LOGGER.exception("Failed to restart clone %s", bot_id)
         await message.reply(f"Restart failed.\n<code>{e}</code>")
@@ -167,7 +180,6 @@ async def manager_callbacks(client, query):
     try:
         if data == "clones":
             if not owner(uid):
-                await query.answer("Not authorized.", show_alert=True)
                 return
             docs = await asyncio.to_thread(get_clones)
             if not docs:
@@ -179,7 +191,6 @@ async def manager_callbacks(client, query):
 
         if data.startswith("clone:"):
             if not owner(uid):
-                await query.answer("Not authorized.", show_alert=True)
                 return
             bot_id = data.split(":", 1)[1]
             item = await asyncio.to_thread(get_clone, bot_id)
@@ -219,7 +230,6 @@ async def manager_callbacks(client, query):
 
         if data.startswith("restart:"):
             if not owner(uid):
-                await query.answer("Not authorized.", show_alert=True)
                 return
             bot_id = data.split(":", 1)[1]
             worker = workers.get(bot_id)
@@ -228,6 +238,7 @@ async def manager_callbacks(client, query):
                 return
             try:
                 await worker.restart()
+                await notify_owner(f"🔄 <b>Clone Restarted</b>\n\nBot: @{worker.username or bot_id}\nID: <code>{bot_id}</code>")
                 await query.answer("Clone restarted.")
                 await query.message.edit_reply_markup(
                     InlineKeyboardMarkup([
@@ -243,7 +254,6 @@ async def manager_callbacks(client, query):
 
         if data.startswith("delete:"):
             if not owner(uid):
-                await query.answer("Not authorized.", show_alert=True)
                 return
             bot_id = data.split(":", 1)[1]
             if not await asyncio.to_thread(get_clone, bot_id):
@@ -261,7 +271,6 @@ async def manager_callbacks(client, query):
 
         if data.startswith("confirm_delete:"):
             if not owner(uid):
-                await query.answer("Not authorized.", show_alert=True)
                 return
             bot_id = data.split(":", 1)[1]
             if not await asyncio.to_thread(get_clone, bot_id):
@@ -279,7 +288,6 @@ async def manager_callbacks(client, query):
 
         if data.startswith("final_delete:"):
             if not owner(uid):
-                await query.answer("Not authorized.", show_alert=True)
                 return
             bot_id = data.split(":", 1)[1]
             if not await asyncio.to_thread(get_clone, bot_id):
@@ -305,9 +313,9 @@ async def manager_callbacks(client, query):
 
 def register_manager(client):
     H = MessageHandler
-    client.add_handler(H(start_manager, filters.command("start") & filters.private))
-    client.add_handler(H(clone, filters.command("clone") & filters.private))
-    client.add_handler(H(mybots, filters.command("mybots") & filters.private))
-    client.add_handler(H(deletebot, filters.command("deletebot") & filters.private))
-    client.add_handler(H(restartbot, filters.command("restart") & filters.private))
-    client.add_handler(CallbackQueryHandler(manager_callbacks))
+    client.add_handler(H(start_manager, filters.command("start") & filters.private & filters.user(OWNER)))
+    client.add_handler(H(clone, filters.command("clone") & filters.private & filters.user(OWNER)))
+    client.add_handler(H(mybots, filters.command("mybots") & filters.private & filters.user(OWNER)))
+    client.add_handler(H(deletebot, filters.command("deletebot") & filters.private & filters.user(OWNER)))
+    client.add_handler(H(restartbot, filters.command("restart") & filters.private & filters.user(OWNER)))
+    client.add_handler(CallbackQueryHandler(manager_callbacks, filters=filters.user(OWNER)))
