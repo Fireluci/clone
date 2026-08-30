@@ -63,19 +63,44 @@ async def clone(client, message):
     if token == BOTTOKEN:
         return await message.reply("Manager bot cannot be cloned.")
 
-    bot_id = clone_id(token)
+    # Resolve the Telegram username before choosing the MongoDB clone ID.
+    # This keeps IDs readable instead of using a token hash.
+    resolver = StoreBot(f"resolve_{abs(hash(token))}", token, "resolver")
+    try:
+        await resolver.client.start()
+        me = await resolver.client.get_me()
+        username = me.username
+        if not username:
+            raise RuntimeError("The bot must have a Telegram username.")
+    except Exception as e:
+        try:
+            await resolver.stop()
+        except Exception:
+            pass
+        LOGGER.exception("Failed to resolve bot username")
+        return await message.reply(f"Could not start bot.\n<code>{e}</code>")
+    finally:
+        try:
+            if resolver.client.is_connected:
+                await resolver.client.stop()
+        except Exception:
+            pass
+
+    bot_id = clone_id(username)
     if bot_id in workers:
-        return await message.reply("Bot is already running.")
+        return await message.reply(f"@{username} is already running.")
+    if await asyncio.to_thread(get_clone, bot_id):
+        return await message.reply(f"@{username} is already registered.")
 
     worker = StoreBot(f"clone_{bot_id}", token, bot_id)
     try:
         await worker.start()
         me = await worker.client.get_me()
         display_name = " ".join(filter(None, [me.first_name, me.last_name])).strip() or "Unknown Bot"
-        username = me.username or "unknown"
+        username = me.username or username
         await asyncio.to_thread(save_clone, bot_id, token, username, display_name)
         workers[bot_id] = worker
-        await message.reply(f"✅ Clone started: <b>{display_name}</b> (@{username})")
+        await message.reply(f"✅ Clone started: <b>{display_name}</b> (@{username})\nID: <code>{bot_id}</code>")
     except Exception as e:
         LOGGER.exception("Failed to create clone %s", bot_id)
         await worker.stop()

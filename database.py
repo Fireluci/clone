@@ -1,4 +1,3 @@
-import hashlib
 from pymongo import MongoClient
 from config import MONGODB, DBNAME, FILES, FORCESUB, SHORTSITE, SHORTAPI, ADMINS
 
@@ -14,8 +13,9 @@ main_db = mongo[DBNAME]
 clones = main_db["clones"]
 
 
-def clone_id(token):
-    return hashlib.sha256(token.encode()).hexdigest()[:12]
+def clone_id(username):
+    """Use the Telegram bot username as the human-readable clone ID."""
+    return str(username).lstrip("@").strip().lower()
 
 
 def clone_db(bot_id):
@@ -71,6 +71,24 @@ def delete_clone(bot_id):
     item = clones.find_one({"_id": bot_id}, {"database": 1})
     clones.delete_one({"_id": bot_id})
     mongo.drop_database(item.get("database", f"clone_{bot_id}") if item else f"clone_{bot_id}")
+
+
+def migrate_clone_id(old_id, new_id, username):
+    """Rename a legacy hash clone ID without moving/deleting its database."""
+    if old_id == new_id:
+        return True
+    old = clones.find_one({"_id": old_id})
+    if not old:
+        return False
+    existing = clones.find_one({"_id": new_id})
+    if existing and existing.get("token") != old.get("token"):
+        raise RuntimeError(f"Clone username @{username} already belongs to another clone")
+    old["_id"] = new_id
+    old["username"] = username
+    clones.replace_one({"_id": new_id}, old, upsert=True)
+    if old_id != new_id:
+        clones.delete_one({"_id": old_id})
+    return True
 
 
 def get_setting(bot_id, key, default=None):
