@@ -70,7 +70,7 @@ async def clone(client, message):
     worker = StoreBot(f"clone_{bot_id}", token, bot_id)
     try:
         await worker.start()
-        me = await worker.get_me()
+        me = await worker.client.get_me()
         display_name = " ".join(filter(None, [me.first_name, me.last_name])).strip() or "Unknown Bot"
         username = me.username or "unknown"
         await asyncio.to_thread(save_clone, bot_id, token, username, display_name)
