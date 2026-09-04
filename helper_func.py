@@ -20,16 +20,21 @@ def is_admin(client, user_id):
 
 
 async def is_subscribed(_, client, update):
+    user = getattr(update, "from_user", None)
+    if not user:
+        return True
+
+    user_id = user.id
     forcesub = getattr(client, "forcesub", FORCESUB)
-    if not forcesub or is_admin(client, update.from_user.id):
+    if not forcesub or is_admin(client, user_id):
         return True
     try:
-        member = await client.get_chat_member(forcesub, update.from_user.id)
+        member = await client.get_chat_member(forcesub, user_id)
         return member.status in (ChatMemberStatus.OWNER, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.MEMBER)
     except UserNotParticipant:
         return False
     except Exception:
-        LOGGER.exception("ForceSub check failed for user %s on bot %s", update.from_user.id, getattr(client, "bot_id", "unknown"))
+        LOGGER.exception("ForceSub check failed for user %s on bot %s", user_id, getattr(client, "bot_id", "unknown"))
         return False
 
 
@@ -54,7 +59,7 @@ async def get_messages(client, message_ids):
             result.extend(await client.get_messages(client.db_channel.id, ids[i:i + 200]))
         except FloodWait as e:
             LOGGER.warning("FloodWait while fetching messages for bot %s: %ss", getattr(client, "bot_id", "unknown"), e.value)
-            await asyncio.sleep(e.value)
+            await asyncio.sleep(e.value + 1)
             result.extend(await client.get_messages(client.db_channel.id, ids[i:i + 200]))
         except Exception:
             LOGGER.exception("Failed to fetch messages for bot %s", getattr(client, "bot_id", "unknown"))
