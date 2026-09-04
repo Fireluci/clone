@@ -5,15 +5,15 @@ from bot import StoreBot
 from config import BOTTOKEN, PORT, ADMINS, FORCESUB
 from database import get_clones, migrate_clone_id
 from handlers import register
-import manager
-from manager import register_manager, workers, notify_owner
+import manager as mgr
+from manager import register_manager, workers, notify_owner, set_manager_client
 
 LOGGER = logging.getLogger(__name__)
 
 
 async def health(request):
-    manager = request.app["manager"]
-    if not manager.client.is_connected:
+    manager_bot = request.app["manager"]
+    if not manager_bot.client.is_connected:
         return web.json_response({"status": "unhealthy", "manager": False}, status=503)
     return web.json_response({
         "status": "ok",
@@ -23,25 +23,26 @@ async def health(request):
     })
 
 
-async def restart_manager(manager):
-    await manager.stop()
-    await manager.client.start()
-    me = await manager.client.get_me()
-    manager.username = me.username or me.first_name
-    manager.client.username = manager.username
-    manager.client.bot_id = "manager"
-    manager.client.admins = ADMINS
-    manager.client.forcesub = FORCESUB
+async def restart_manager(manager_bot):
+    await manager_bot.stop()
+    await manager_bot.client.start()
+    me = await manager_bot.client.get_me()
+    manager_bot.username = me.username or me.first_name
+    manager_bot.client.username = manager_bot.username
+    manager_bot.client.bot_id = "manager"
+    manager_bot.client.admins = ADMINS
+    manager_bot.client.forcesub = FORCESUB
+    set_manager_client(manager_bot.client)
 
 
-async def watchdog(manager):
+async def watchdog(manager_bot):
     while True:
         await asyncio.sleep(60)
-        if not manager.client.is_connected:
+        if not manager_bot.client.is_connected:
             try:
                 LOGGER.warning("Manager disconnected; restarting")
-                await restart_manager(manager)
-                await notify_owner(f"🔄 <b>Manager Restarted</b>\n\nManager: @{manager.username}")
+                await restart_manager(manager_bot)
+                await notify_owner(f"🔄 <b>Manager Restarted</b>\n\nManager: @{manager_bot.username}")
             except Exception as e:
                 LOGGER.exception("Manager restart failed")
                 await notify_owner(f"❌ <b>Manager Restart Failed</b>\n\n<code>{e}</code>")
@@ -59,7 +60,6 @@ async def watchdog(manager):
 
 
 async def migrate_legacy_clones():
-    """Convert old hash IDs to Telegram usernames while preserving their DB names."""
     migrated = []
     for item in await asyncio.to_thread(get_clones):
         old_id = str(item.get("_id", ""))
@@ -95,20 +95,22 @@ async def migrate_legacy_clones():
 
 async def main():
     if not BOTTOKEN:
-        raise RuntimeError("BOTTOKEN is missing")
+        raise RuntimeError("BOTTOKEN environment variable is missing")
 
-    manager = StoreBot("manager", BOTTOKEN, "manager")
-    await manager.client.start()
+    manager_bot = StoreBot("manager", BOTTOKEN, "manager")
+    await manager_bot.client.start()
     try:
-        me = await manager.client.get_me()
-        manager.username = me.username or me.first_name
-        manager.client.bot_id = "manager"
-        manager.client.admins = ADMINS
-        manager.client.forcesub = FORCESUB
-        register_manager(manager.client)
-        LOGGER.info("Manager started @%s", manager.username)
-        manager.manager_client = manager.client
-        await notify_owner(f"🟢 <b>Manager Online</b>\n\nManager: @{manager.username}")
+        me = await manager_bot.client.get_me()
+        manager_bot.username = me.username or me.first_name
+        manager_bot.client.bot_id = "manager"
+        manager_bot.client.admins = ADMINS
+        manager_bot.client.forcesub = FORCESUB
+
+        set_manager_client(manager_bot.client)
+        register_manager(manager_bot.client)
+
+        LOGGER.info("Manager started @%s", manager_bot.username)
+        await notify_owner(f"🟢 <b>Manager Online</b>\n\nManager: @{manager_bot.username}")
 
         await migrate_legacy_clones()
 
@@ -128,13 +130,13 @@ async def main():
                 )
 
         app = web.Application()
-        app["manager"] = manager
+        app["manager"] = manager_bot
         app.router.add_get("/", health)
         runner = web.AppRunner(app)
         await runner.setup()
         await web.TCPSite(runner, "0.0.0.0", PORT).start()
 
-        watch_task = asyncio.create_task(watchdog(manager))
+        watch_task = asyncio.create_task(watchdog(manager_bot))
         try:
             await asyncio.Event().wait()
         finally:
@@ -142,10 +144,10 @@ async def main():
             await asyncio.gather(watch_task, return_exceptions=True)
             for worker in list(workers.values()):
                 await worker.stop()
-            await manager.stop()
+            await manager_bot.stop()
             await runner.cleanup()
     except Exception:
-        await manager.stop()
+        await manager_bot.stop()
         raise
 
 
