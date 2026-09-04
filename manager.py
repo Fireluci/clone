@@ -5,13 +5,19 @@ from pyrogram import filters
 from pyrogram.handlers import MessageHandler, CallbackQueryHandler
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from bot import StoreBot
-from config import OWNER, ADMINS, BOTTOKEN, FILES, FORCESUB, SHORTSITE, SHORTAPI
+from config import OWNER, BOTTOKEN, FILES, FORCESUB, SHORTSITE, SHORTAPI, ADMINS
 from database import clone_id, save_clone, get_clone, get_clones, delete_clone, get_setting
+from handlers import register
 
 LOGGER = logging.getLogger(__name__)
 workers = {}
 manager_client = None
 TOKEN_RE = re.compile(r"^\d+:[A-Za-z0-9_-]{20,}$")
+
+
+def set_manager_client(client):
+    global manager_client
+    manager_client = client
 
 
 def manager_admin(user_id):
@@ -53,16 +59,16 @@ def clone_buttons(docs):
 
 
 async def start_manager(client, message):
-    if not manager_admin(message.from_user.id):
+    if not message.from_user or not manager_admin(message.from_user.id):
         return
     await message.reply(
-        "<b>🌟 Hello {}</b>\n\n<b>I'm a File Store Bot Manager 🤖</b>\n\nManage and run your bot clones from here.".format(message.from_user.first_name),
+        f"<b>🌟 Hello {message.from_user.first_name}</b>\n\n<b>I'm a File Store Bot Manager 🤖</b>\n\nManage and run your bot clones from here.",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🤖 Bot Clones", callback_data="clones")]])
     )
 
 
 async def clone(client, message):
-    if not owner(message.from_user.id):
+    if not message.from_user or not owner(message.from_user.id):
         return
     args = message.text.split(maxsplit=1)
     if len(args) != 2:
@@ -73,8 +79,6 @@ async def clone(client, message):
     if token == BOTTOKEN:
         return await message.reply("Manager bot cannot be cloned.")
 
-    # Resolve the Telegram username before choosing the MongoDB clone ID.
-    # This keeps IDs readable instead of using a token hash.
     resolver = StoreBot(f"resolve_{abs(hash(token))}", token, "resolver")
     try:
         await resolver.client.start()
@@ -83,10 +87,6 @@ async def clone(client, message):
         if not username:
             raise RuntimeError("The bot must have a Telegram username.")
     except Exception as e:
-        try:
-            await resolver.stop()
-        except Exception:
-            pass
         LOGGER.exception("Failed to resolve bot username")
         return await message.reply(f"Could not start bot.\n<code>{e}</code>")
     finally:
@@ -104,6 +104,7 @@ async def clone(client, message):
 
     worker = StoreBot(f"clone_{bot_id}", token, bot_id)
     try:
+        register(worker.client)
         await worker.start()
         me = await worker.client.get_me()
         display_name = " ".join(filter(None, [me.first_name, me.last_name])).strip() or "Unknown Bot"
@@ -120,7 +121,7 @@ async def clone(client, message):
 
 
 async def mybots(client, message):
-    if not owner(message.from_user.id):
+    if not message.from_user or not owner(message.from_user.id):
         return
     try:
         docs = await asyncio.to_thread(get_clones)
@@ -133,13 +134,11 @@ async def mybots(client, message):
 
 
 async def deletebot(client, message):
-    if not owner(message.from_user.id):
+    if not message.from_user or not owner(message.from_user.id):
         return
     args = message.text.split(maxsplit=2)
     if len(args) == 2:
-        return await message.reply(
-            f"First confirmation required:\n<code>/deletebot {args[1]} confirm</code>"
-        )
+        return await message.reply(f"First confirmation required:\n<code>/deletebot {args[1]} confirm</code>")
     if len(args) != 3 or args[2].lower() != "confirm":
         return await message.reply("Use the exact confirmation shown above.")
     bot_id = args[1].strip()
@@ -155,7 +154,7 @@ async def deletebot(client, message):
 
 
 async def restartbot(client, message):
-    if not owner(message.from_user.id):
+    if not message.from_user or not owner(message.from_user.id):
         return
     args = message.text.split(maxsplit=1)
     if len(args) != 2:
@@ -163,7 +162,7 @@ async def restartbot(client, message):
     bot_id = args[1].strip()
     worker = workers.get(bot_id)
     if not worker:
-        return await message.reply("Clone is not running. Start it by restarting the application or recreate it.")
+        return await message.reply("Clone is not running.")
     try:
         await worker.restart()
         await message.reply(f"✅ Clone <code>{bot_id}</code> restarted.")
@@ -175,7 +174,7 @@ async def restartbot(client, message):
 
 async def manager_callbacks(client, query):
     data = query.data or ""
-    uid = query.from_user.id
+    uid = query.from_user.id if query.from_user else 0
 
     try:
         if data == "clones":
@@ -240,13 +239,6 @@ async def manager_callbacks(client, query):
                 await worker.restart()
                 await notify_owner(f"🔄 <b>Clone Restarted</b>\n\nBot: @{worker.username or bot_id}\nID: <code>{bot_id}</code>")
                 await query.answer("Clone restarted.")
-                await query.message.edit_reply_markup(
-                    InlineKeyboardMarkup([
-                        [InlineKeyboardButton("🔄 Restart Clone", callback_data=f"restart:{bot_id}")],
-                        [InlineKeyboardButton("🗑 Delete Clone", callback_data=f"delete:{bot_id}")],
-                        [InlineKeyboardButton("⬅️ Back", callback_data="clones")]
-                    ])
-                )
             except Exception:
                 LOGGER.exception("Failed to restart clone %s", bot_id)
                 await query.answer("Restart failed.", show_alert=True)
@@ -306,9 +298,9 @@ async def manager_callbacks(client, query):
     except Exception:
         LOGGER.exception("Manager callback failed: %s", data)
         try:
-            await query.answer("An error occurred. Check logs.", show_alert=True)
+            await query.answer("An error occurred.", show_alert=True)
         except Exception:
-            LOGGER.exception("Failed to answer manager callback")
+            pass
 
 
 def register_manager(client):
