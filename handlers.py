@@ -24,7 +24,7 @@ def register(client):
     client.add_handler(MessageHandler(shortener_cmd, filters.command(["shortener", "shortlink"]) & filters.private))
     client.add_handler(MessageHandler(batch, filters.command("batch") & filters.private))
     client.add_handler(MessageHandler(genlink, filters.command("genlink") & filters.private))
-    client.add_handler(MessageHandler(auto_shortener, (filters.text | filters.caption) & filters.private))
+    client.add_handler(MessageHandler(auto_shortener, (filters.text | filters.caption | filters.forwarded) & filters.private))
     client.add_handler(CallbackQueryHandler(callbacks))
 
 
@@ -393,7 +393,7 @@ async def get_shortlink(client, link):
                     return data.get("shortlink", link)
         except Exception:
             LOGGER.exception("Shortener request failed for bot %s", client.bot_id)
-        return f"https://{URL}/shortLink?token={API}&format=json&link={link}"
+        return link
 
     url = f"https://{URL}/api"
     params = {"api": API, "url": link}
@@ -407,10 +407,7 @@ async def get_shortlink(client, link):
     except Exception:
         LOGGER.exception("Shortener request failed for bot %s", client.bot_id)
 
-    if URL == "clicksfly.com":
-        return f"https://{URL}/api?api={API}&url={link}"
-
-    return f"https://{URL}/api?api={API}&link={link}"
+    return link
 
 
 async def callbacks(client, query):

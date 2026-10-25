@@ -3,7 +3,7 @@ import logging
 from aiohttp import web
 from bot import StoreBot
 from config import BOTTOKEN, PORT, ADMINS, FORCESUB
-from database import get_clones, migrate_clone_id
+from database import get_clones, migrate_clone_id, clone_id
 from handlers import register
 import manager as mgr
 from manager import register_manager, workers, notify_owner, set_manager_client
@@ -64,7 +64,7 @@ async def migrate_legacy_clones():
     for item in await asyncio.to_thread(get_clones):
         old_id = str(item.get("_id", ""))
         username = str(item.get("username") or "").lstrip("@").strip()
-        if username and old_id == username:
+        if username and old_id == clone_id(username):
             continue
         token = item.get("token")
         if not token:
@@ -78,8 +78,8 @@ async def migrate_legacy_clones():
             if not username:
                 LOGGER.warning("Skipping legacy clone %s: bot has no username", old_id)
                 continue
-            new_id = username.lstrip("@").strip()
-            await asyncio.to_thread(migrate_clone_id, old_id, new_id, new_id)
+            new_id = clone_id(username)
+            await asyncio.to_thread(migrate_clone_id, old_id, new_id, username)
             migrated.append((old_id, new_id))
             LOGGER.info("Migrated clone ID %s -> @%s", old_id, new_id)
         except Exception:
@@ -112,6 +112,14 @@ async def main():
         LOGGER.info("Manager started @%s", manager_bot.username)
         await notify_owner(f"🟢 <b>Manager Online</b>\n\nManager: @{manager_bot.username}")
 
+        # Start the health endpoint first so the host sees the app as alive while clones boot.
+        app = web.Application()
+        app["manager"] = manager_bot
+        app.router.add_get("/", health)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        await web.TCPSite(runner, "0.0.0.0", PORT).start()
+
         await migrate_legacy_clones()
 
         for item in await asyncio.to_thread(get_clones):
@@ -128,13 +136,6 @@ async def main():
                 await notify_owner(
                     f"❌ <b>Clone Failed To Start</b>\n\nID: <code>{item.get('_id')}</code>\nError: <code>{e}</code>"
                 )
-
-        app = web.Application()
-        app["manager"] = manager_bot
-        app.router.add_get("/", health)
-        runner = web.AppRunner(app)
-        await runner.setup()
-        await web.TCPSite(runner, "0.0.0.0", PORT).start()
 
         watch_task = asyncio.create_task(watchdog(manager_bot))
         try:
