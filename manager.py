@@ -79,7 +79,7 @@ async def clone(client, message):
     if token == BOTTOKEN:
         return await message.reply("Manager bot cannot be cloned.")
 
-    resolver = StoreBot(f"resolve_{abs(hash(token))}", token, "resolver")
+    resolver = StoreBot(f"resolve_{abs(hash(token))}", token, "resolver", in_memory=True)
     try:
         await resolver.client.start()
         me = await resolver.client.get_me()
@@ -102,9 +102,8 @@ async def clone(client, message):
     if await asyncio.to_thread(get_clone, bot_id):
         return await message.reply(f"@{username} is already registered.")
 
-    worker = StoreBot(f"clone_{bot_id}", token, bot_id)
+    worker = StoreBot(f"clone_{bot_id}", token, bot_id, register)
     try:
-        register(worker.client)
         await worker.start()
         me = await worker.client.get_me()
         display_name = " ".join(filter(None, [me.first_name, me.last_name])).strip() or "Unknown Bot"
@@ -166,7 +165,8 @@ async def restartbot(client, message):
     try:
         await worker.restart()
         await message.reply(f"✅ Clone <code>{bot_id}</code> restarted.")
-        await notify_owner(f"🔄 <b>Clone Restarted</b>\n\nBot: @{worker.username or bot_id}\nID: <code>{bot_id}</code>")
+        if not worker.alerted:
+            await notify_owner(f"🔄 <b>Clone Restarted</b>\n\nBot: @{worker.username or bot_id}\nID: <code>{bot_id}</code>")
     except Exception as e:
         LOGGER.exception("Failed to restart clone %s", bot_id)
         await message.reply(f"Restart failed.\n<code>{e}</code>")
@@ -216,7 +216,7 @@ async def manager_callbacks(client, query):
                 f"Shortener Site: <code>{site or 'Not set'}</code>\n"
                 f"Shortener API: <code>{api or 'Not set'}</code>\n"
                 f"Admins: <code>{' '.join(map(str, admins)) or 'None'}</code>\n"
-                f"Database: <code>{item.get('database', f'clone_{bot_id}')}</code>"
+                f"Database: <code>{item.get('database', bot_id)}</code>"
             )
             buttons = [
                 [InlineKeyboardButton("🔄 Restart Clone", callback_data=f"restart:{bot_id}")],
@@ -237,7 +237,8 @@ async def manager_callbacks(client, query):
                 return
             try:
                 await worker.restart()
-                await notify_owner(f"🔄 <b>Clone Restarted</b>\n\nBot: @{worker.username or bot_id}\nID: <code>{bot_id}</code>")
+                if not worker.alerted:
+                    await notify_owner(f"🔄 <b>Clone Restarted</b>\n\nBot: @{worker.username or bot_id}\nID: <code>{bot_id}</code>")
                 await query.answer("Clone restarted.")
             except Exception:
                 LOGGER.exception("Failed to restart clone %s", bot_id)

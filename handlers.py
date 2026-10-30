@@ -2,12 +2,13 @@ import asyncio
 import re
 import aiohttp
 import logging
+from urllib.parse import quote
 from pyrogram import filters
 from pyrogram.handlers import MessageHandler, CallbackQueryHandler
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.errors import FloodWait, UserIsBlocked, InputUserDeactivated
 
-from config import START_MESSAGE, FORCE_SUB_MESSAGE, SHORTSITE, SHORTAPI, ADMIN_USERNAME
+from config import START_MESSAGE, FORCE_SUB_MESSAGE, SHORTSITE, SHORTAPI, ADMIN_USERNAME, MONGO_LIMIT_MB
 from helper_func import encode, decode, get_messages, get_message_id, is_admin, is_subscribed
 from database import (
     present_user, add_user, delete_user, all_users, user_count,
@@ -28,6 +29,67 @@ def register(client):
     client.add_handler(CallbackQueryHandler(callbacks))
 
 
+def spawn(client, coro):
+    """Run long work (file delivery, broadcasts) in the background.
+
+    Pyrogram only runs a few handlers at a time per bot; a handler that sleeps
+    for minutes would otherwise block every other user of that bot.
+    """
+    tasks = getattr(client, "bg_tasks", None)
+    if tasks is None:
+        tasks = client.bg_tasks = set()
+    task = asyncio.create_task(coro)
+    tasks.add(task)
+    task.add_done_callback(tasks.discard)
+    return task
+
+
+def delivering(client):
+    """User IDs that currently have files being delivered by this bot."""
+    users = getattr(client, "delivering", None)
+    if users is None:
+        users = client.delivering = set()
+    return users
+
+
+def share_url(link):
+    return f"https://telegram.me/share/url?url={quote(link, safe='')}"
+
+
+def link_id(raw, channel):
+    """Decode one message ID from a link, rejecting payloads not made for this channel."""
+    number = int(raw)
+    if number <= 0 or number % channel:
+        raise ValueError("link was not generated for this files channel")
+    return number // channel
+
+
+async def send_files(client, user_id, messages):
+    try:
+        for msg in messages:
+            if not msg or msg.empty:
+                continue
+            while True:
+                try:
+                    await msg.copy(
+                        user_id,
+                        caption=msg.caption.html if msg.caption else None
+                    )
+                    await asyncio.sleep(0.5)
+                    break
+                except FloodWait as e:
+                    LOGGER.warning("FloodWait of %s seconds for user %s on bot %s", e.value, user_id, client.bot_id)
+                    await asyncio.sleep(e.value + 1)
+                except (UserIsBlocked, InputUserDeactivated):
+                    LOGGER.info("User %s is unreachable on bot %s; stopping delivery", user_id, client.bot_id)
+                    return
+                except Exception:
+                    LOGGER.exception("File send error for bot %s", client.bot_id)
+                    break
+    finally:
+        delivering(client).discard(user_id)
+
+
 async def start(client, message):
     if not message.from_user:
         return
@@ -38,11 +100,15 @@ async def start(client, message):
     if not await is_subscribed(None, client, message):
         return await not_joined(client, message)
 
-    if not await asyncio.to_thread(present_user, client.bot_id, user_id):
-        LOGGER.info("Adding user %s to bot %s", user_id, client.bot_id)
-        await asyncio.to_thread(add_user, client.bot_id, user_id)
+    # A database problem must never stop people from getting their files.
+    try:
+        if not await asyncio.to_thread(present_user, client.bot_id, user_id):
+            LOGGER.info("Adding user %s to bot %s", user_id, client.bot_id)
+            await asyncio.to_thread(add_user, client.bot_id, user_id)
+    except Exception:
+        LOGGER.exception("Could not save user %s on bot %s", user_id, client.bot_id)
 
-    if len(message.text) <= 7:
+    if len(message.command) < 2:
         admin_url = f"https://t.me/{ADMIN_USERNAME.lstrip('@')}"
         return await message.reply_text(
             START_MESSAGE.format(first=first_name),
@@ -52,44 +118,36 @@ async def start(client, message):
         )
 
     try:
-        value = await decode(message.text.split(" ", 1)[1])
+        value = await decode(message.command[1])
         args = value.split("-")
+        channel = abs(client.db_channel.id)
 
         if len(args) == 2:
-            ids = [int(args[1]) // abs(client.db_channel.id)]
+            ids = [link_id(args[1], channel)]
         elif len(args) == 3:
-            a = int(args[1]) // abs(client.db_channel.id)
-            b = int(args[2]) // abs(client.db_channel.id)
+            a = link_id(args[1], channel)
+            b = link_id(args[2], channel)
             ids = range(a, b + 1) if a <= b else range(a, b - 1, -1)
         else:
-            return
+            raise ValueError("unexpected link format")
 
         if len(ids) > 100:
             return await message.reply("This link contains too many files.")
-
-        messages = await get_messages(client, ids)
-    except Exception:
-        LOGGER.exception("Invalid start link for bot %s", client.bot_id)
+    except Exception as e:
+        LOGGER.warning("Invalid start link for bot %s: %s", client.bot_id, e)
         return await message.reply("Invalid link.")
 
-    for msg in messages:
-        if not msg:
-            continue
-        sent_successfully = False
-        while not sent_successfully:
-            try:
-                await msg.copy(
-                    user_id,
-                    caption=msg.caption.html if msg.caption else None
-                )
-                await asyncio.sleep(0.5)
-                sent_successfully = True
-            except FloodWait as e:
-                LOGGER.warning("FloodWait of %s seconds for user %s on bot %s", e.value, user_id, client.bot_id)
-                await asyncio.sleep(e.value + 1)
-            except Exception:
-                LOGGER.exception("File send error for bot %s", client.bot_id)
-                break
+    if user_id in delivering(client):
+        return await message.reply("Your previous files are still being sent. Please wait a moment.")
+
+    try:
+        messages = await get_messages(client, ids)
+    except Exception:
+        LOGGER.exception("Could not fetch files for bot %s", client.bot_id)
+        return await message.reply("Could not fetch the files right now. Please try again later.")
+
+    delivering(client).add(user_id)
+    spawn(client, send_files(client, user_id, messages))
 
 
 async def not_joined(client, message):
@@ -125,9 +183,7 @@ async def broadcast(client, message):
     if getattr(client, "broadcast_running", False):
         return await message.reply("A broadcast is already running.")
 
-    total = await asyncio.to_thread(user_count, client.bot_id)
-    users = await asyncio.to_thread(all_users, client.bot_id)
-
+    # Claim the lock first so two /broadcast commands can't both start.
     client.broadcast_running = True
     client.broadcast_cancelled = False
 
@@ -135,11 +191,22 @@ async def broadcast(client, message):
         InlineKeyboardButton("❌ Cancel", callback_data="cancel_broadcast")
     ]])
 
-    status = await message.reply(
-        f"<b>Broadcasting...</b>\n\nTotal: <code>{total}</code>\nSent: <code>0</code>",
-        reply_markup=cancel
-    )
+    try:
+        total = await asyncio.to_thread(user_count, client.bot_id)
+        users = await asyncio.to_thread(all_users, client.bot_id)
+        status = await message.reply(
+            f"<b>Broadcasting...</b>\n\nTotal: <code>{total}</code>\nSent: <code>0</code>",
+            reply_markup=cancel
+        )
+    except Exception:
+        client.broadcast_running = False
+        raise
 
+    # Runs in the background so the bot stays responsive (and Cancel keeps working).
+    spawn(client, run_broadcast(client, message.reply_to_message, status, users, total, cancel))
+
+
+async def run_broadcast(client, source, status, users, total, cancel):
     sent = failed = blocked = deleted = 0
 
     try:
@@ -149,14 +216,14 @@ async def broadcast(client, message):
                 break
 
             try:
-                await message.reply_to_message.copy(user_id)
+                await source.copy(user_id)
                 sent += 1
             except FloodWait as e:
                 await asyncio.sleep(e.value + 1)
                 if client.broadcast_cancelled:
                     break
                 try:
-                    await message.reply_to_message.copy(user_id)
+                    await source.copy(user_id)
                     sent += 1
                 except Exception:
                     LOGGER.exception("Broadcast retry failed for user %s on bot %s", user_id, client.bot_id)
@@ -193,6 +260,8 @@ async def broadcast(client, message):
             f"Failed: <code>{failed}</code>\n"
             f"Remaining: <code>{max(0, total - processed)}</code>"
         )
+    except Exception:
+        LOGGER.exception("Broadcast crashed on bot %s", client.bot_id)
     finally:
         client.broadcast_running = False
         client.broadcast_cancelled = False
@@ -202,10 +271,11 @@ async def stats(client, message):
     if not message.from_user or not is_admin(client, message.from_user.id):
         return
 
+    limit = MONGO_LIMIT_MB * 1024 * 1024
     mine = await asyncio.to_thread(collection_storage, client.bot_id)
     total = await asyncio.to_thread(cluster_storage)
     other = max(0, total - mine)
-    left = max(0, 512 * 1024 * 1024 - total)
+    left = max(0, limit - total)
 
     def size(n):
         if n >= 1024 * 1024:
@@ -217,7 +287,7 @@ async def stats(client, message):
         f"Users: <code>{await asyncio.to_thread(user_count, client.bot_id)}</code>\n\n"
         f"This bot: <code>{size(mine)}</code>\n"
         f"Other bots: <code>{size(other)}</code>\n"
-        f"MongoDB: <code>{size(total)} / 512 MB</code>\n"
+        f"MongoDB: <code>{size(total)} / {MONGO_LIMIT_MB} MB</code>\n"
         f"Left: <code>{size(left)}</code>"
     )
 
@@ -291,8 +361,8 @@ async def batch_input(client, message):
         return await message.reply(
             f"<b>Link:</b> {link}\n\n<b>Slink:</b> {slink}",
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("Share Link", url=f"https://telegram.me/share/url?url={link}"),
-                InlineKeyboardButton("Share Slink", url=f"https://telegram.me/share/url?url={slink}")
+                InlineKeyboardButton("Share Link", url=share_url(link)),
+                InlineKeyboardButton("Share Slink", url=share_url(slink))
             ]])
         )
 
@@ -317,8 +387,8 @@ async def batch_input(client, message):
     await message.reply(
         f"<b>Link:</b> {link}\n\n<b>Slink:</b> {slink}",
         reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("Share Link", url=f"https://telegram.me/share/url?url={link}"),
-            InlineKeyboardButton("Share Slink", url=f"https://telegram.me/share/url?url={slink}")
+            InlineKeyboardButton("Share Link", url=share_url(link)),
+            InlineKeyboardButton("Share Slink", url=share_url(slink))
         ]])
     )
 
@@ -356,7 +426,7 @@ async def auto_shortener(client, message):
         f"<b>Original:-</b> {original}\n\n<b>Short Link:-</b> {slink}",
         quote=True,
         reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("Share Short Link", url=f"https://telegram.me/share/url?url={slink}")
+            InlineKeyboardButton("Share Short Link", url=share_url(slink))
         ]])
     )
 

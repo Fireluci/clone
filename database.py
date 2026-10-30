@@ -19,8 +19,9 @@ def clone_id(username):
 
 
 def clone_db(bot_id):
+    """Each clone's data lives in a database named after its bot username."""
     item = clones.find_one({"_id": bot_id}, {"database": 1})
-    return mongo[item.get("database", f"clone_{bot_id}")] if item else mongo[f"clone_{bot_id}"]
+    return mongo[(item or {}).get("database") or bot_id]
 
 
 def users(bot_id):
@@ -46,16 +47,25 @@ def save_clone(bot_id, token, username, display_name=None):
     for key, value in defaults.items():
         current.setdefault(key, value)
 
+    # Database name = bot username (e.g. "hfrwdbot"). Never reuse the manager DB name.
+    database = old.get("database") or (bot_id if bot_id != DBNAME else f"clone_{bot_id}")
+
     data = {
         "_id": bot_id,
         "token": token,
         "username": username,
         "display_name": display_name or old.get("display_name") or (f"@{username}" if username else "Unknown Bot"),
-        "database": old.get("database", f"clone_{bot_id}"),
+        "database": database,
         "settings": current,
     }
     clones.replace_one({"_id": bot_id}, data, upsert=True)
     settings(bot_id).replace_one({"_id": "settings"}, current, upsert=True)
+    # Human-readable label so the database is easy to identify in Atlas.
+    settings(bot_id).update_one(
+        {"_id": "info"},
+        {"$set": {"username": username, "name": data["display_name"]}},
+        upsert=True,
+    )
     return data
 
 
@@ -70,25 +80,8 @@ def get_clones():
 def delete_clone(bot_id):
     item = clones.find_one({"_id": bot_id}, {"database": 1})
     clones.delete_one({"_id": bot_id})
-    mongo.drop_database(item.get("database", f"clone_{bot_id}") if item else f"clone_{bot_id}")
-
-
-def migrate_clone_id(old_id, new_id, username):
-    """Rename a legacy hash clone ID without moving/deleting its database."""
-    if old_id == new_id:
-        return True
-    old = clones.find_one({"_id": old_id})
-    if not old:
-        return False
-    existing = clones.find_one({"_id": new_id})
-    if existing and existing.get("token") != old.get("token"):
-        raise RuntimeError(f"Clone username @{username} already belongs to another clone")
-    old["_id"] = new_id
-    old["username"] = username
-    clones.replace_one({"_id": new_id}, old, upsert=True)
-    if old_id != new_id:
-        clones.delete_one({"_id": old_id})
-    return True
+    if item:
+        mongo.drop_database(item.get("database") or bot_id)
 
 
 def get_setting(bot_id, key, default=None):

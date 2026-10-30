@@ -1,14 +1,20 @@
 import asyncio
 import logging
+import time
 from aiohttp import web
 from bot import StoreBot
 from config import BOTTOKEN, PORT, ADMINS, FORCESUB
-from database import get_clones, migrate_clone_id, clone_id
+from database import get_clones
 from handlers import register
 import manager as mgr
 from manager import register_manager, workers, notify_owner, set_manager_client
 
 LOGGER = logging.getLogger(__name__)
+
+WATCHDOG_INTERVAL = 60      # seconds between health checks
+LIVENESS_TIMEOUT = 30       # seconds to wait for get_me()
+MAX_FAILURE_ALERTS = 3      # stop alerting the owner after this many failed restarts
+MAX_BACKOFF = 3600          # never wait more than 1 hour between restart attempts
 
 
 async def health(request):
@@ -26,6 +32,9 @@ async def health(request):
 async def restart_manager(manager_bot):
     await manager_bot.stop()
     await manager_bot.client.start()
+    # Pyrogram drops handlers on stop(); add them back or the manager goes silent.
+    if not manager_bot.client.dispatcher.groups:
+        register_manager(manager_bot.client)
     me = await manager_bot.client.get_me()
     manager_bot.username = me.username or me.first_name
     manager_bot.client.username = manager_bot.username
@@ -35,62 +44,65 @@ async def restart_manager(manager_bot):
     set_manager_client(manager_bot.client)
 
 
+async def alive(client):
+    """True only if the client is connected AND answers a real API call."""
+    if not client.is_connected:
+        return False
+    try:
+        await asyncio.wait_for(client.get_me(), LIVENESS_TIMEOUT)
+        return True
+    except Exception:
+        return False
+
+
+def backoff(fails):
+    return min(WATCHDOG_INTERVAL * 2 ** fails, MAX_BACKOFF)
+
+
 async def watchdog(manager_bot):
+    states = {}
     while True:
-        await asyncio.sleep(60)
-        if not manager_bot.client.is_connected:
-            try:
-                LOGGER.warning("Manager disconnected; restarting")
-                await restart_manager(manager_bot)
-                await notify_owner(f"🔄 <b>Manager Restarted</b>\n\nManager: @{manager_bot.username}")
-            except Exception as e:
-                LOGGER.exception("Manager restart failed")
-                await notify_owner(f"❌ <b>Manager Restart Failed</b>\n\n<code>{e}</code>")
+        await asyncio.sleep(WATCHDOG_INTERVAL)
 
-        for bot_id, worker in list(workers.items()):
-            if worker.client.is_connected:
+        targets = [("manager", manager_bot, lambda: restart_manager(manager_bot))]
+        targets += [(bot_id, worker, worker.restart) for bot_id, worker in list(workers.items())]
+
+        for key in list(states):
+            if key not in {t[0] for t in targets}:
+                del states[key]
+
+        for key, bot, restart in targets:
+            state = states.setdefault(key, {"fails": 0, "next": 0.0})
+            if await alive(bot.client):
+                state["fails"] = 0
+                state["next"] = 0.0
                 continue
-            try:
-                LOGGER.warning("Clone %s disconnected; restarting", bot_id)
-                await worker.restart()
-                await notify_owner(f"🔄 <b>Clone Auto-Restarted</b>\n\nBot: @{worker.username or bot_id}\nID: <code>{bot_id}</code>")
-            except Exception as e:
-                LOGGER.exception("Clone %s restart failed", bot_id)
-                await notify_owner(f"❌ <b>Clone Restart Failed</b>\n\nBot: @{worker.username or bot_id}\nID: <code>{bot_id}</code>\nError: <code>{e}</code>")
-
-
-async def migrate_legacy_clones():
-    migrated = []
-    for item in await asyncio.to_thread(get_clones):
-        old_id = str(item.get("_id", ""))
-        username = str(item.get("username") or "").lstrip("@").strip()
-        if username and old_id == clone_id(username):
-            continue
-        token = item.get("token")
-        if not token:
-            LOGGER.warning("Skipping clone %s: no token", old_id)
-            continue
-        resolver = StoreBot(f"migrate_{abs(hash(token))}", token, "migration")
-        try:
-            await resolver.client.start()
-            me = await resolver.client.get_me()
-            username = me.username
-            if not username:
-                LOGGER.warning("Skipping legacy clone %s: bot has no username", old_id)
+            if time.monotonic() < state["next"]:
                 continue
-            new_id = clone_id(username)
-            await asyncio.to_thread(migrate_clone_id, old_id, new_id, username)
-            migrated.append((old_id, new_id))
-            LOGGER.info("Migrated clone ID %s -> @%s", old_id, new_id)
-        except Exception:
-            LOGGER.exception("Failed to migrate clone %s", old_id)
-        finally:
+
+            is_manager = key == "manager"
+            name = f"@{bot.username}" if bot.username else str(key)
+            LOGGER.warning("%s %s is not responding; restarting (failed attempts so far: %s)",
+                           "Manager" if is_manager else "Clone", name, state["fails"])
             try:
-                if resolver.client.is_connected:
-                    await resolver.client.stop()
-            except Exception:
-                LOGGER.exception("Failed to close migration client for %s", old_id)
-    return migrated
+                await restart()
+                state["fails"] = 0
+                state["next"] = 0.0
+                if is_manager:
+                    await notify_owner(f"🔄 <b>Manager Restarted</b>\n\nManager: @{bot.username}")
+                elif not bot.alerted:
+                    await notify_owner(f"🔄 <b>Clone Auto-Restarted</b>\n\nBot: {name}\nID: <code>{key}</code>")
+            except Exception as e:
+                state["fails"] += 1
+                wait = backoff(state["fails"])
+                state["next"] = time.monotonic() + wait
+                LOGGER.exception("%s %s restart failed", "Manager" if is_manager else "Clone", name)
+                if state["fails"] <= MAX_FAILURE_ALERTS:
+                    label = "Manager" if is_manager else "Clone"
+                    await notify_owner(
+                        f"❌ <b>{label} Restart Failed</b>\n\nBot: {name}\nID: <code>{key}</code>\n"
+                        f"Attempt: {state['fails']}\nNext try in: {wait}s\nError: <code>{e}</code>"
+                    )
 
 
 async def main():
@@ -120,21 +132,23 @@ async def main():
         await runner.setup()
         await web.TCPSite(runner, "0.0.0.0", PORT).start()
 
-        await migrate_legacy_clones()
-
         for item in await asyncio.to_thread(get_clones):
+            bot_id = item["_id"]
+            # Register the worker before starting it, so a clone that fails at boot
+            # is still known to the watchdog and /restart and gets retried.
+            worker = StoreBot(f"clone_{bot_id}", item["token"], bot_id, register)
+            workers[bot_id] = worker
             try:
-                worker = StoreBot(f"clone_{item['_id']}", item["token"], item["_id"])
-                register(worker.client)
                 await worker.start()
-                workers[item["_id"]] = worker
-                await notify_owner(
-                    f"🟢 <b>Clone Online</b>\n\nBot: @{worker.username or item['_id']}\nID: <code>{item['_id']}</code>"
-                )
+                if not worker.alerted:
+                    await notify_owner(
+                        f"🟢 <b>Clone Online</b>\n\nBot: @{worker.username or bot_id}\nID: <code>{bot_id}</code>"
+                    )
             except Exception as e:
-                LOGGER.exception("Clone %s failed to start", item.get("_id"))
+                LOGGER.exception("Clone %s failed to start", bot_id)
                 await notify_owner(
-                    f"❌ <b>Clone Failed To Start</b>\n\nID: <code>{item.get('_id')}</code>\nError: <code>{e}</code>"
+                    f"❌ <b>Clone Failed To Start</b>\n\nID: <code>{bot_id}</code>\nError: <code>{e}</code>\n\n"
+                    f"It will be retried automatically."
                 )
 
         watch_task = asyncio.create_task(watchdog(manager_bot))

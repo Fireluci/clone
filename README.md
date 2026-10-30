@@ -19,10 +19,11 @@ Set these on Koyeb for the manager/defaults:
 - `ADMINS` — default admin IDs separated by spaces
 - `WORKERS`
 - `PORT`
+- `MONGO_LIMIT_MB` — MongoDB storage limit shown in `/stats` (default `512`)
 
 The manager/default credentials may be supplied through environment variables. Clone tokens are stored in MongoDB because the manager must restart clones after a process restart.
 
-Each clone gets its own MongoDB database named `clone_<id>`. Its `users` and `config` collections are isolated from other clones.
+Each clone gets its own MongoDB database named after the bot username (for example `hfrwdbot`); its `config` collection holds an `info` document with the bot's name. Its `users` and `config` collections are isolated from other clones.
 
 ## Permissions
 
