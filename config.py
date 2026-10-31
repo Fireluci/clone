@@ -1,7 +1,7 @@
 import os
 import logging
 
-BOTTOKEN = os.getenv("BOTTOKEN", "8191103559:AAHL8HM-MgOPT-AakHL_37mtLaor0XEElDk")
+BOTTOKEN = os.getenv("BOTTOKEN", "8191103559:AAG-6navNOYM0pSAZqDYzzwsLBSXS-EsRHI")
 MONGODB = os.getenv("MONGODB", "mongodb+srv://herostore:herostore@herostore.ywtvule.mongodb.net/?appName=herostore")
 DBNAME = os.getenv("DBNAME", "manager")
 
