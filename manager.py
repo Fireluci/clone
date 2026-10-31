@@ -6,7 +6,7 @@ from pyrogram.handlers import MessageHandler, CallbackQueryHandler
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from bot import StoreBot
 from config import OWNER, BOTTOKEN, FILES, FORCESUB, SHORTSITE, SHORTAPI, ADMINS
-from database import clone_id, save_clone, get_clone, get_clones, delete_clone, get_setting
+from database import clone_id, save_clone, get_clone, get_clones, delete_clone, get_setting, adoptable_users
 from handlers import register
 
 LOGGER = logging.getLogger(__name__)
@@ -70,10 +70,14 @@ async def start_manager(client, message):
 async def clone(client, message):
     if not message.from_user or not owner(message.from_user.id):
         return
-    args = message.text.split(maxsplit=1)
-    if len(args) != 2:
-        return await message.reply("Usage: /clone BOT_TOKEN")
+    args = message.text.split()
+    if len(args) not in (2, 3):
+        return await message.reply(
+            "Usage: /clone BOT_TOKEN\n\nTo adopt an existing bot's database (keeps its users):\n"
+            "/clone BOT_TOKEN DATABASE_NAME"
+        )
     token = args[1].strip()
+    adopt = args[2].strip() if len(args) == 3 else None
     if not TOKEN_RE.fullmatch(token):
         return await message.reply("Invalid bot token.")
     if token == BOTTOKEN:
@@ -102,15 +106,23 @@ async def clone(client, message):
     if await asyncio.to_thread(get_clone, bot_id):
         return await message.reply(f"@{username} is already registered.")
 
+    adopted_users = 0
+    if adopt:
+        adopted_users, problem = await asyncio.to_thread(adoptable_users, adopt)
+        if problem:
+            return await message.reply(problem)
+
     worker = StoreBot(f"clone_{bot_id}", token, bot_id, register)
     try:
         await worker.start()
         me = await worker.client.get_me()
         display_name = " ".join(filter(None, [me.first_name, me.last_name])).strip() or "Unknown Bot"
         username = me.username or username
-        await asyncio.to_thread(save_clone, bot_id, token, username, display_name)
+        await asyncio.to_thread(save_clone, bot_id, token, username, display_name, adopt)
         workers[bot_id] = worker
         text = f"✅ Clone started: <b>{display_name}</b> (@{username})\nID: <code>{bot_id}</code>"
+        if adopt:
+            text += f"\nAdopted database <code>{adopt}</code> with {adopted_users} users"
         await message.reply(text)
         await notify_owner(f"🤖 <b>Clone Started</b>\n\nBot: @{username}\nID: <code>{bot_id}</code>")
     except Exception as e:

@@ -1,3 +1,4 @@
+import re
 from pymongo import MongoClient
 from config import MONGODB, DBNAME, FILES, FORCESUB, SHORTSITE, SHORTAPI, ADMINS
 
@@ -32,10 +33,33 @@ def settings(bot_id):
     return clone_db(bot_id)["config"]
 
 
-def save_clone(bot_id, token, username, display_name=None):
+def adoptable_users(name):
+    """Check that an existing database can be adopted by a clone. Returns (user_count, error)."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,38}", name):
+        return 0, "Invalid database name."
+    if name in (DBNAME, "admin", "local", "config"):
+        return 0, "That database cannot be used."
+    count = mongo[name]["users"].estimated_document_count()
+    if not count:
+        return 0, f"Database '{name}' has no users - check the name."
+    return count, None
+
+
+def save_clone(bot_id, token, username, display_name=None, database=None):
     old = clones.find_one({"_id": bot_id}) or {}
-    current = settings(bot_id).find_one({"_id": "settings"}) or {}
+    # Database name = bot username (e.g. "hfrwdbot"), unless an existing database is
+    # being adopted. Never reuse the manager DB name.
+    database = database or old.get("database") or (bot_id if bot_id != DBNAME else f"clone_{bot_id}")
+    cfg = mongo[database]["config"]
+
+    current = cfg.find_one({"_id": "settings"}) or {}
     current.pop("_id", None)
+
+    # An old sarah-jisoo database keeps its shortener in a different document.
+    legacy = cfg.find_one({"_id": "shortener_config"}) or {}
+    if legacy.get("shortener") and legacy.get("shortener_api"):
+        current.setdefault("shortsite", legacy["shortener"])
+        current.setdefault("shortapi", legacy["shortener_api"])
 
     defaults = {
         "files": FILES,
@@ -47,9 +71,6 @@ def save_clone(bot_id, token, username, display_name=None):
     for key, value in defaults.items():
         current.setdefault(key, value)
 
-    # Database name = bot username (e.g. "hfrwdbot"). Never reuse the manager DB name.
-    database = old.get("database") or (bot_id if bot_id != DBNAME else f"clone_{bot_id}")
-
     data = {
         "_id": bot_id,
         "token": token,
@@ -59,9 +80,9 @@ def save_clone(bot_id, token, username, display_name=None):
         "settings": current,
     }
     clones.replace_one({"_id": bot_id}, data, upsert=True)
-    settings(bot_id).replace_one({"_id": "settings"}, current, upsert=True)
+    cfg.replace_one({"_id": "settings"}, current, upsert=True)
     # Human-readable label so the database is easy to identify in Atlas.
-    settings(bot_id).update_one(
+    cfg.update_one(
         {"_id": "info"},
         {"$set": {"username": username, "name": data["display_name"]}},
         upsert=True,

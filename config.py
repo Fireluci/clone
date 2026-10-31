@@ -18,7 +18,7 @@ SHORTAPI = os.getenv("SHORTAPI", "c576b9cdd34ceb572a8df1f57eabf7c11efbda3a")
 ADMINS = [int(x) for x in os.getenv("ADMINS", "5051689666 1058015838 6012123382").replace(",", " ").split()]
 
 WORKERS = int(os.getenv("WORKERS", "4"))
-PORT = int(os.getenv("PORT", "8080"))
+PORT = int(os.getenv("PORT", "8082"))
 MONGO_LIMIT_MB = int(os.getenv("MONGO_LIMIT_MB", "512"))
 
 START_MESSAGE = """<b>🌟 Hello {first},
