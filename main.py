@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import time
 from aiohttp import web
@@ -8,7 +7,11 @@ from database import get_clones
 from handlers import register
 import manager as mgr
 from manager import register_manager, workers, notify_owner, set_manager_client
-
+import asyncio
+try:
+    asyncio.get_event_loop()
+except RuntimeError:
+    asyncio.set_event_loop(asyncio.new_event_loop())
 LOGGER = logging.getLogger(__name__)
 
 WATCHDOG_INTERVAL = 60      # seconds between health checks
