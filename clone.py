@@ -1,13 +1,3 @@
-"""What every file-store clone does: delivers files from links, generates links and batches,
-shortens links, broadcasts, shows stats and lets its admins change the shortener.
-
-Each handler receives the clone's Pyrogram client. The manager (manager.py) attaches these to it:
-  client.bot_id       the clone's ID (its bot username, lowercase)
-  client.username     its Telegram username
-  client.cfg          its settings: files, forcesub, shortsite, shortapi, admins
-  client.db_channel   the resolved files channel
-  client.invitelink   invite link of the force-sub channel (None when force-sub is off)
-"""
 import asyncio
 import base64
 import re
