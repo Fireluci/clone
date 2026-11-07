@@ -1,8 +1,3 @@
-"""Running and managing bots.
-
-  Bot        one running Telegram bot (the manager itself or a clone): start, stop, restart, load settings
-  manager    owner-only handlers: create, list, edit settings, restart and delete clones
-"""
 import asyncio
 import re
 from html import escape
