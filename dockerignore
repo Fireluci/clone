@@ -1,7 +1,0 @@
-*.session
-*.session-journal
-__pycache__/
-*.pyc
-.git
-.env
-*.md
