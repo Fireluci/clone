@@ -1,11 +1,3 @@
-"""MongoDB layer shared by the manager and the clones.
-
-Layout:
-  <DBNAME>.clones     one document per clone: token, username, display name, database name
-  <bot username>      one database per clone (named after its bot username), holding
-      users           everyone who pressed /start on that clone
-      config          "settings" (files, forcesub, shortener, admins) and "info" (bot name)
-"""
 import re
 
 from pymongo import MongoClient
